@@ -10,9 +10,14 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.119.0",
     "google-genai>=1.45.0",
+    "llama-index>=0.10.68",
+    "llama-index-embeddings-gemini>=0.1.8",
+    "llama-index-embeddings-openai>=0.1.11",
     "loguru>=0.7.3",
     "openai>=2.5.0",
+    "pinecone[asyncio]>=7.3.0",
     "pydantic-settings>=2.0.0",
+    "pymupdf>=1.26.5",
 ]
 
 [project.scripts]
@@ -21,3 +26,8 @@ rag-app = "rag_app:main"
 [build-system]
 requires = ["uv_build>=0.9.3,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.0.1",
+]

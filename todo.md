@@ -9,7 +9,7 @@
 - [ ] Set up local development with docker-compose.yml
 
 ## Document Ingestion Pipeline
-- [ ] Implement markdown/HTML parser for documentation
+- [ ] Implement PDF parser for documentation
 - [ ] Add intelligent chunking (respect headers, code blocks, tables)
 - [ ] Integrate embedding generation (OpenAI/Cohere)
 - [ ] Set up vector database (Pinecone/Weaviate/Qdrant)

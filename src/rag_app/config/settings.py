@@ -21,7 +21,23 @@ class LocalModelsSettings(BaseSettings):
     embedding_base_url : str = "http://localhost:8081/v1"
 
     model_config = SettingsConfigDict(env_prefix="LOCAL_MODELS_")
-    
+
+class EmbeddingSettings(BaseSettings):
+    provider: str = "openai"  # Options: openai, gemini, local_models
+
+    model_config = SettingsConfigDict(env_prefix="EMBEDDING_")
+
+class PineconeSettings(BaseSettings):
+    api_key: str = "your-pinecone-api-key"
+    index_name: str = "rag-index"
+    dimension: int = 1536
+    metric: str = "cosine"
+    cloud: str = "aws"
+    region: str = "us-east-1"
+    environment: str = "dev"
+
+    model_config = SettingsConfigDict(env_prefix="PINECONE_")
+
 
 class Settings(BaseSettings):
 
@@ -38,6 +54,8 @@ class Settings(BaseSettings):
     openai: OpenAISettings = OpenAISettings()
     gemini: GeminiSettings = GeminiSettings()
     local_models: LocalModelsSettings = LocalModelsSettings()
+    embedding: EmbeddingSettings = EmbeddingSettings()
+    pinecone: PineconeSettings = PineconeSettings()
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
