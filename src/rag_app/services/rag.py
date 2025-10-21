@@ -6,6 +6,7 @@ from rag_app.llm.base import BaseLLMModel
 import time
 import asyncio
 from sentence_transformers import CrossEncoder
+from typing import AsyncGenerator
 
 class RagService:
     def __init__(self,
@@ -35,7 +36,7 @@ class RagService:
             pairs = [(query, context['content']) for context in contexts]
             scores = await asyncio.to_thread(self._reranker.predict, pairs)
             for i, context in enumerate(contexts):
-                context['rerank_score'] = scores[i]
+                context['rerank_score'] = float(scores[i])  # Convert to Python float
             ranked_contexts = sorted(contexts, key=lambda x: x['rerank_score'], reverse=True)
             return ranked_contexts[:top_k]
         except Exception as e:
@@ -113,7 +114,7 @@ class RagService:
             final_results = []
             for result in results:
                 final_results.append({"content": result['metadata'].get('node_content', ''),
-                                      "score": result['score'],
+                                      "score": float(result['score']),  # Convert to Python float
                                       "source": result['metadata'].get('source', 'unknown')})
             return final_results
         except Exception as e:
@@ -144,7 +145,7 @@ class RagService:
             logger.error(f"Duplicate removal failed: {e}")
             return results
     
-    async def generate_answer(self, query: str, contexts: list[dict]) -> str:
+    async def generate_answer(self, query: str, contexts: list[dict]) -> AsyncGenerator[str, None]:
         """
         Generates a final answer based on the top contexts.
 
@@ -157,9 +158,10 @@ class RagService:
         """
 
         if not contexts:
-            return "No contexts available to generate an answer."
+            logger.warning("No contexts available to generate an answer.")
+            yield "No contexts available to generate an answer."
         if not query:
-            return "Please provide a valid query."
+            yield "Please provide a valid query."
         
         try:        
             context_texts = "\n\n".join([f"Source: {ctx['source']}\nContent: {ctx['content']}" for ctx in contexts])
@@ -179,18 +181,18 @@ class RagService:
                 {"role": "system", "content": "You are a helpful assistant that answers questions based on provided contexts."},
                 {"role": "user", "content": prompt}
             ]
-            response = await self._llm_model.generate_completion(
+            
+            async for chunk in self._llm_model.stream_completion(
                 messages=messages,
-                model=settings.openai.completion_model,
-            )
+                model=settings.openai.completion_model):
+                yield chunk
 
-            return response
         except Exception as e:
             logger.error(f"Answer generation failed: {e}")
-            return "An error occurred while generating the answer."
+            yield "An error occurred while generating the answer."
 
 
-    async def answer_query(self, query: str) -> dict:
+    async def answer_query(self, query: str) -> AsyncGenerator[dict, None]:
         """
         Answers a user query using the RAG approach.
 
@@ -202,18 +204,22 @@ class RagService:
         """
 
         if not query:
-            return {"answer": "Please provide a valid query.", "sources": []}
+            logger.warning("Received empty query.")
+            yield {"type": "error", "data": "Please provide a valid query."}
         
         try:
             start_time = time.time()
             logger.info(f"Starting RAG retrieval for query: {query}")
+            yield {"type": "status", "data": "Rewriting query."}
             rewritten_query = await self.query_rewriter(query)
             logger.info(f"Rewritten query: {rewritten_query}")
 
             logger.info("Generating embedding for rewritten query.")
+            yield {"type": "status", "data": "Generating query embedding."}
             query_embedding = await self._embed_model.embed_document(rewritten_query)
 
-            logger.info("Retrieving documents and questions from vector store.")
+            logger.info("Retrieving relevant documents from vector store.")
+            yield {"type": "status", "data": "Retrieving relevant documents."}
             results = await self.retrieve_documents(query_embedding, top_k=10)
             question_results = await self.retrieve_documents(query_embedding, top_k=20, namespace=settings.pinecone.questions_namespace )
             logger.info(f"Retrieved {len(results)} relevant documents and {len(question_results)} relevant questions.")
@@ -225,13 +231,18 @@ class RagService:
             final_results = self.remove_duplicates(final_results)
             
             logger.info("Reranking the retrieved results.")
+            yield {"type": "status", "data": "Reranking retrieved documents."}
             final_results = await self.rerank(rewritten_query, final_results, top_k=5)
 
             logger.info("Generating final answer from top contexts.")
-            answer = await self.generate_answer(rewritten_query, final_results)
+            yield {"type": "status", "data": "Generating final answer."}            
+            async for chunk in self.generate_answer(rewritten_query, final_results):
+                yield {"type": "token", "data": chunk}
+                
+            yield {"type": "sources", "data": final_results}
             elapsed_time = time.time() - start_time
             logger.info(f"RAG retrieval completed in {elapsed_time:.2f} seconds.")
-            return {"answer": answer, "sources": final_results}
+            
         except Exception as e:
             logger.error(f"Error in answering query: {e}")
-            return {"answer": "An error occurred while processing your query.", "sources": []}
+            yield {"type": "error", "data": "An error occurred while processing your query."}

@@ -1,6 +1,7 @@
 from rag_app.llm.base import BaseLLMModel
 from rag_app.config.settings import settings
 from rag_app.config.logging import logger
+from google import genai
 
 def get_llm_model() -> BaseLLMModel:
     if settings.llm.provider == "openai":
@@ -10,7 +11,8 @@ def get_llm_model() -> BaseLLMModel:
     elif settings.llm.provider == "gemini":
         from rag_app.llm.gemini import GeminiLLM
         logger.info("Initializing Gemini LLM")
-        return GeminiLLM(api_key=settings.gemini.api_key,model=settings.gemini.completion_model)
+        client = genai.Client(api_key=settings.gemini.api_key)
+        return GeminiLLM(client=client)
     elif settings.llm.provider == "local":
         from rag_app.llm.local import LocalLLM
         logger.info("Initializing Local LLM")

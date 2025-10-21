@@ -1,9 +1,10 @@
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from .base import BaseLLMModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, AsyncGenerator
 from rag_app.config.settings import settings
 from rag_app.config.logging import logger
+
 
 
 class OpenAILLM(BaseLLMModel):
@@ -25,3 +26,25 @@ class OpenAILLM(BaseLLMModel):
         )
         content = response.choices[0].message.content
         return content.strip() if content else ""
+    
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(Exception),
+        before_sleep=lambda retry_state: logger.warning(f"Retrying LLM stream call, attempt {retry_state.attempt_number}")
+    )
+    async def stream_completion(self, messages: List[Dict[str, Any]], model: str, max_tokens: int = 500, temperature: float = 0.7) -> AsyncGenerator[str, None]:
+        response = await self.client.chat.completions.create(
+            model=model,
+            messages=messages,  # type: ignore
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True
+        )
+        async for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                yield content
+            
+
