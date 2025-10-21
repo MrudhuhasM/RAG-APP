@@ -29,7 +29,7 @@ def get_chunk_embeddings() -> BaseEmbedding:
 def get_embed_model() -> BaseEmbeddingModel:
     if settings.embedding.provider == "openai":
         logger.info("Initializing OpenAI Embedding Model")
-        client = AsyncOpenAI(api_key=settings.openai.api_key)
+        client = AsyncOpenAI(api_key=settings.openai.api_key, timeout=settings.embedding_timeout)
         return OpenAIEmbeddingModel(_client=client)
     elif settings.embedding.provider == "gemini":
         logger.info("Initializing Gemini Embedding Model")
@@ -37,7 +37,7 @@ def get_embed_model() -> BaseEmbeddingModel:
         return GeminiEmbeddingModel(_client=client)
     elif settings.embedding.provider == "local":
         logger.info("Initializing Local Models Embedding Model")
-        client = AsyncOpenAI(base_url=settings.local_models.embedding_base_url, api_key="test")
+        client = AsyncOpenAI(base_url=settings.local_models.embedding_base_url, api_key="test", timeout=settings.embedding_timeout)
         return OpenAIEmbeddingModel(_client=client)
     else:
         raise ValueError(f"Unsupported embedding provider: {settings.embedding.provider}")

@@ -1,4 +1,6 @@
 import asyncio
+from rag_app.config.settings import settings
+from google.genai import types
 from rag_app.embeddings.base import BaseEmbeddingModel
 
 class GeminiEmbeddingModel(BaseEmbeddingModel):
@@ -8,19 +10,21 @@ class GeminiEmbeddingModel(BaseEmbeddingModel):
 
     async def embed_document(self, document):
         response = await self._client.aio.models.embed_content(
-            model="gemini-1.5-embedding",
-            contents=document
+            model=settings.gemini.embedding_model,
+            contents=document,
+            config=types.EmbedContentConfig(output_dimensionality=settings.embedding.dimension)
         )
-        return response.embeddings
+        return response.embeddings[0].values
     
 
     async def embed_documents(self, documents):
         response = await self._client.aio.models.embed_content(
-            model="gemini-1.5-embedding",
-            contents=documents
+            model=settings.gemini.embedding_model,
+            contents=documents,
+            config=types.EmbedContentConfig(output_dimensionality=settings.embedding.dimension)
         )
 
         results = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: [embedding for embedding in response.embeddings]
+            None, lambda: [embedding for embedding in response.embeddings[0].values]
         )
         return results

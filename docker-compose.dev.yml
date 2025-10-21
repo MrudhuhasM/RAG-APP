@@ -1,0 +1,66 @@
+﻿services:
+  rag-app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: rag-app:dev
+    container_name: rag-app-dev
+    ports:
+      - "8000:8000"
+    environment:
+      # Environment
+      - ENV=development
+      - LOG_LEVEL=DEBUG
+      
+      # Application Settings
+      - APP_NAME=RAG App (Dev)
+      - APP_VERSION=0.1.0-dev
+      - MAX_FILE_SIZE=10485760
+      - CORS_ALLOWED_ORIGINS=*
+      
+      # HTTP Timeouts
+      - HTTP_TIMEOUT=30.0
+      - EMBEDDING_TIMEOUT=20.0
+      
+      # OpenAI Configuration
+      - OPENAI__API_KEY=${OPENAI_API_KEY}
+      - OPENAI__EMBEDDING_MODEL=text-embedding-ada-002
+      - OPENAI__COMPLETION_MODEL=gpt-3.5-turbo
+      
+      # Gemini Configuration (Optional)
+      - GEMINI__API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI__EMBEDDING_MODEL=models/text-embedding-004
+      - GEMINI__COMPLETION_MODEL=gemini-1.5-flash
+      
+      # Provider Selection
+      - EMBEDDING__PROVIDER=${EMBEDDING_PROVIDER:-openai}
+      - LLM__PROVIDER=${LLM_PROVIDER:-openai}
+      
+      # Pinecone Configuration
+      - PINECONE__API_KEY=${PINECONE_API_KEY}
+      - PINECONE__INDEX_NAME=${PINECONE_INDEX_NAME:-rag-index-dev}
+      - PINECONE__DIMENSION=${PINECONE_DIMENSION:-1536}
+      - PINECONE__METRIC=${PINECONE_METRIC:-cosine}
+      - PINECONE__CLOUD=${PINECONE_CLOUD:-aws}
+      - PINECONE__REGION=${PINECONE_REGION:-us-east-1}
+      - PINECONE__ENVIRONMENT=development
+      - PINECONE__QUESTIONS_NAMESPACE=questions
+      
+      # Reranker Model
+      - RERANKER__MODEL=BAAI/bge-reranker-base
+    
+    volumes:
+      # Mount source code for hot-reload
+      - ./src:/app/src
+      - ./static:/app/static
+      - ./logs:/app/logs
+    
+    command: uvicorn rag_app.app:app --host 0.0.0.0 --port 8000 --reload
+    
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
