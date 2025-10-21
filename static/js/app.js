@@ -121,7 +121,7 @@ function showUploadStatus(message, type) {
     uploadStatus.className = 'upload-status ' + type;
 }
 
-// Query Handler
+// Query Handler with Streaming Support
 async function handleQuery() {
     const query = queryInput.value.trim();
     
@@ -137,6 +137,15 @@ async function handleQuery() {
     askButton.querySelector('.button-text').style.display = 'none';
     askButton.querySelector('.button-loader').style.display = 'inline-flex';
     
+    // Show results section immediately
+    resultsSection.style.display = 'block';
+    answerContent.innerHTML = '<p class="streaming-status">Processing your question...</p>';
+    sourcesList.innerHTML = '';
+    
+    let fullAnswer = '';
+    let sources = [];
+    let currentStatus = '';
+    
     try {
         const response = await fetch(API_BASE_URL + '/query', {
             method: 'POST',
@@ -147,18 +156,70 @@ async function handleQuery() {
         });
         
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Query failed');
+            throw new Error('Query failed with status: ' + response.status);
         }
         
-        const result = await response.json();
-        console.log('Query result:', result);
-        displayResults(result);
-        saveToHistory(query, result);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+                console.log('Stream complete');
+                break;
+            }
+            
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const jsonStr = line.substring(6);
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        console.log('Received:', data);
+                        
+                        if (data.type === 'status') {
+                            // Update status message
+                            currentStatus = data.data;
+                            answerContent.innerHTML = '<p class="streaming-status"><span class="status-icon">⏳</span> ' + data.data + '</p>';
+                        } else if (data.type === 'token') {
+                            // Append token to answer
+                            if (currentStatus) {
+                                // Clear status, start showing answer
+                                answerContent.innerHTML = '';
+                                currentStatus = '';
+                            }
+                            fullAnswer += data.data;
+                            answerContent.innerHTML = formatAnswer(fullAnswer) + '<span class="cursor-blink">▊</span>';
+                        } else if (data.type === 'sources') {
+                            // Display sources
+                            sources = data.data;
+                            // Remove cursor
+                            answerContent.innerHTML = formatAnswer(fullAnswer);
+                            displaySources(sources);
+                        } else if (data.type === 'error') {
+                            throw new Error(data.data);
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse JSON:', jsonStr, e);
+                    }
+                }
+            }
+        }
+        
+        // Save to history
+        if (fullAnswer && sources) {
+            saveToHistory(query, { answer: fullAnswer, sources: sources });
+        }
+        
+        // Scroll to results
+        resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
         
     } catch (error) {
         console.error('Query error:', error);
-        alert('Error: ' + error.message);
+        answerContent.innerHTML = '<p class="error-message">❌ Error: ' + error.message + '</p>';
     } finally {
         // Re-enable button
         askButton.disabled = false;
@@ -167,7 +228,7 @@ async function handleQuery() {
     }
 }
 
-// Display Results
+// Display Results (for history items)
 function displayResults(result) {
     // Show results section
     resultsSection.style.display = 'block';
@@ -176,12 +237,22 @@ function displayResults(result) {
     answerContent.innerHTML = formatAnswer(result.answer);
     
     // Display sources
-    sourcesList.innerHTML = result.sources
-        .map((source, index) => createSourceElement(source, index))
-        .join('');
+    displaySources(result.sources);
     
     // Scroll to results
     resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Display Sources Helper
+function displaySources(sources) {
+    if (!sources || sources.length === 0) {
+        sourcesList.innerHTML = '<p class="no-sources">No sources available</p>';
+        return;
+    }
+    
+    sourcesList.innerHTML = sources
+        .map((source, index) => createSourceElement(source, index))
+        .join('');
 }
 
 function formatAnswer(answer) {

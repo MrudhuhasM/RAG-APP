@@ -1,7 +1,8 @@
+import json
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
-
+from fastapi.responses import StreamingResponse
 from rag_app.services.rag import RagService
 from rag_app.config.settings import settings
 from rag_app.config.logging import logger
@@ -44,32 +45,18 @@ async def answer_query(
     
     Returns the generated answer along with relevant sources.
     """
-    try:
-        if not request.query.strip():
-            raise HTTPException(status_code=400, detail="Query cannot be empty")
-        
-        request_id = getattr(http_request.state, 'request_id', 'unknown')
-        logger.info("Processing query", extra={"query": request.query[:100], "request_id": request_id})
-        
-        result = await rag_service.answer_query(request.query.strip())
-        
-        # Validate response structure
-        if not isinstance(result, dict) or "answer" not in result or "sources" not in result:
-            logger.error(f"Invalid response from RagService: {result}")
-            raise HTTPException(status_code=500, detail="Invalid service response")
-        
-        return AnswerResponse(
-            answer=result["answer"],
-            sources=[Source(**source) for source in result["sources"]]
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        request_id = getattr(http_request.state, 'request_id', 'unknown')
-        logger.error(
-            "Error processing query",
-            extra={"error": str(e), "request_id": request_id},
-            exc_info=True
-        )
-        raise HTTPException(status_code=500, detail="Internal server error")
+    
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    async def stream_generator():
+        try:
+            async for chunk in rag_service.answer_query(request.query.strip()):
+                yield f"data: {json.dumps(chunk)}\n\n"  
+        except Exception as e:
+            logger.error(f"Error in stream_generator: {e}", exc_info=True)
+            error_event = {"type": "error", "data": "An error occurred while processing your query."}
+            yield f"data: {json.dumps(error_event)}\n\n"
+            
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+    
