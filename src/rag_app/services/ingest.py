@@ -4,21 +4,24 @@ import asyncio
 from openai import AsyncOpenAI
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import SemanticSplitterNodeParser
+from tqdm.asyncio import tqdm
 
 from llama_index.core import Document
 from llama_index.core.schema import BaseNode
+from rag_app.llm.base import BaseLLMModel
 
 from rag_app.config.logging import logger
+from rag_app.config.settings import settings
 from rag_app.embeddings.base import BaseEmbeddingModel
 from rag_app.core.vector_client import VectorClient
 
 
 class IngestionService:
     
-    def __init__(self, reader, node_parser, client, embedding_client, vector_client):
+    def __init__(self, reader, node_parser, llm_model, embedding_client, vector_client):
         self._pdf_reader: PyMuPDFReader = reader
         self._semantic_node_parser: SemanticSplitterNodeParser = node_parser
-        self._llm_client: AsyncOpenAI = client
+        self._llm_model: BaseLLMModel = llm_model
         self._embedding_client: BaseEmbeddingModel = embedding_client
         self._vector_client: VectorClient = vector_client
         self._semaphore = asyncio.Semaphore(5)  # Limit concurrent LLM calls
@@ -77,20 +80,23 @@ class IngestionService:
         """
         return prompt
     
-    async def _call_llm(self, prompt: str) -> str:
+    async def _call_llm(self, prompt: str) -> str | None:
         try:
-            response = await self._llm_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that extracts questions from text."},
-                    {"role": "user", "content": prompt}
-                ],
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant that extracts questions from text."},
+                {"role": "user", "content": prompt}
+            ]
+            response = await self._llm_model.generate_completion(
+                model=settings.openai.completion_model,
+                messages=messages,
+                max_tokens=500,
+                temperature=0.7
             )
-            content = response.choices[0].message.content
-            return content if content else ""
+            content = response.strip()
+            return content if content else None
         except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            return ""
+            logger.warning(f"LLM call failed: {e}")
+            return None
 
     def _parse_llm_response(self, response: str) -> list[str]:
         try:
@@ -99,8 +105,8 @@ class IngestionService:
             data = json.loads(response)
             return data.get("questions", [])
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response: {e}")
-            raise e
+            logger.warning(f"Failed to parse LLM response: {e}")
+            return []
         
 
     async def _extract_metadata(self, node: BaseNode) -> tuple[BaseNode, bool]:
@@ -108,19 +114,24 @@ class IngestionService:
             try:
                 prompt = self._build_prompt(node)
                 llm_response = await self._call_llm(prompt)
+                if llm_response is None:
+                    return node, False
                 questions = await asyncio.get_event_loop().run_in_executor(None, lambda: self._parse_llm_response(llm_response))
                 node.metadata.update({"questions": questions})
                 return node, True
             except Exception as e:
-                logger.error(f"Failed to extract metadata: {e}")
+                logger.warning(f"Failed to extract metadata: {e}")
                 return node, False
 
     async def _process_nodes(self, nodes: list[BaseNode]) -> list[BaseNode]:
         try:
             logger.info("Extracting metadata for nodes...")
             tasks = [self._extract_metadata(node) for node in nodes]
-            processed_nodes = await asyncio.gather(*tasks)
-            processed_nodes = [node for node, success in processed_nodes if success]
+            processed_nodes = []
+            for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Extracting metadata"):
+                node, success = await coro
+                if success:
+                    processed_nodes.append(node)
             failure_count = len(nodes) - len(processed_nodes)
             logger.info("Metadata extraction completed.")
 
@@ -143,15 +154,18 @@ class IngestionService:
                 node.embedding = embedding
                 return node, True
             except Exception as e:
-                logger.error(f"Failed to embed node {node.id_}: {e}")
+                logger.warning(f"Failed to embed node {node.id_}: {e}")
                 return node, False
 
     async def _embed_nodes(self, nodes: list[BaseNode]) -> list[BaseNode]:
         try:
             logger.info("Embedding nodes...")
             tasks = [self._embed_node(node) for node in nodes]
-            embedded_nodes = await asyncio.gather(*tasks)
-            embedded_nodes = [node for node, success in embedded_nodes if success]
+            embedded_nodes = []
+            for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Embedding nodes"):
+                node, success = await coro
+                if success:
+                    embedded_nodes.append(node)
             failure_count = len(nodes) - len(embedded_nodes)
             logger.info("Embedding completed.")
 
@@ -172,7 +186,7 @@ class IngestionService:
         return {
             "id": node.id_,
             "values": node.embedding,
-            "metadata": node.metadata
+            "metadata": {**node.metadata, "node_content": node.get_content()}
         }
     
     async def _upsert_nodes(self, nodes: list[BaseNode], namespace: str = "") -> None:
@@ -190,7 +204,7 @@ class IngestionService:
                 "metadata": {
                     "question": question,
                     "node_id": node.id_,
-                    "node_content": node.get_content()[:500],  # truncated for metadata
+                    "node_content": node.get_content(),
                     "source": node.metadata.get("source", "")
                 }
             }

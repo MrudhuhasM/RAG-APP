@@ -54,7 +54,7 @@ class VectorClient:
         api_key: str,
         environment: str,
         index_name: str,
-        dimension: int = 1536,
+        dimension: int = 768,
         metric: str = "cosine",
         cloud: str = "aws",
         region: str = "us-east-1"
@@ -88,7 +88,9 @@ class VectorClient:
                 logger.info(f"Index '{self.index_name}' created successfully")
             else:
                 logger.info(f"Index '{self.index_name}' already exists")
-            return self.pc.IndexAsyncio(self.index_name)
+            index_info = await self.pc.describe_index(self.index_name)
+            host = index_info.host
+            return self.pc.IndexAsyncio(host=host)
         except PineconeException as e:
             logger.error(f"Failed to create/ensure index: {e}")
             raise

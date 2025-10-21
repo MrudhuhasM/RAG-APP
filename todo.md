@@ -15,21 +15,21 @@
 - [x] Set up vector database (Pinecone/Weaviate/Qdrant)
 - [ ] Implement cloud storage for raw documents
 - [ ] Create metadata storage (SQLite/PostgreSQL for doc sets/history)
-- [ ] Build POST /ingest endpoint for uploading/processing docs
+- [x] Build POST /ingest endpoint for uploading/processing docs
 
 ## Query Engine
-- [ ] Implement semantic search for top-K relevant chunks (K=5)
-- [ ] Add context window management (max 8K tokens)
-- [ ] Create prompt template with system instructions for accuracy
-- [ ] Integrate LLM calls (GPT-4/Claude) for answer generation
-- [ ] Add source attribution in responses
-- [ ] Build POST /query endpoint for submitting questions
+- [x] Implement semantic search for top-K relevant chunks (K=5)
+- [x] Add context window management (max 8K tokens)
+- [x] Create prompt template with system instructions for accuracy
+- [x] Integrate LLM calls (GPT-4/Claude) for answer generation
+- [x] Add source attribution in responses
+- [x] Build POST /query endpoint for submitting questions
 
 ## API and Web Interface
-- [ ] Implement GET /sources endpoint for listing doc sets
-- [ ] Ensure health check endpoint is functional
-- [ ] Create basic HTML/JavaScript frontend (single file)
-- [ ] Add error handling for malformed questions/no relevant docs
+- [x] Implement GET /sources endpoint for listing doc sets
+- [x] Ensure health check endpoint is functional
+- [x] Create basic HTML/JavaScript frontend (single file)
+- [x] Add error handling for malformed questions/no relevant docs
 
 ## Testing and Validation
 - [x] Ingest at least 100 pages of documentation without errors

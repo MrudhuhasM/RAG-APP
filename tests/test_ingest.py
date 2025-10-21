@@ -43,7 +43,7 @@ def ingestion_service(mock_reader, mock_node_parser, mock_llm_client, mock_embed
     return IngestionService(
         reader=mock_reader,
         node_parser=mock_node_parser,
-        client=mock_llm_client,
+        llm_model=mock_llm_client,
         embedding_client=mock_embedding_client,
         vector_client=mock_vector_client
     )
@@ -97,17 +97,15 @@ class TestIngestionService:
 
     @pytest.mark.asyncio
     async def test_call_llm_success(self, ingestion_service, mock_llm_client):
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = '{"questions": ["Q1"]}'
-        mock_llm_client.chat.completions.create.return_value = mock_response
+        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
         response = await ingestion_service._call_llm("prompt")
         assert response == '{"questions": ["Q1"]}'
 
     @pytest.mark.asyncio
     async def test_call_llm_failure(self, ingestion_service, mock_llm_client):
-        mock_llm_client.chat.completions.create.side_effect = Exception("API error")
+        mock_llm_client.generate_completion.side_effect = Exception("API error")
         response = await ingestion_service._call_llm("prompt")
-        assert response == ""
+        assert response is None
 
     def test_parse_llm_response_valid(self, ingestion_service):
         response = '{"questions": ["Q1", "Q2"]}'
@@ -120,15 +118,13 @@ class TestIngestionService:
         assert questions == ["Q1"]
 
     def test_parse_llm_response_invalid(self, ingestion_service):
-        with pytest.raises(json.JSONDecodeError):
-            ingestion_service._parse_llm_response("invalid json")
+        questions = ingestion_service._parse_llm_response("invalid json")
+        assert questions == []
 
     @pytest.mark.asyncio
     async def test_extract_metadata_success(self, ingestion_service, mock_llm_client):
         node = TextNode(id_="1", text="Content")
-        mock_llm_client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=MagicMock(content='{"questions": ["Q1"]}'))]
-        )
+        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
         processed_node, success = await ingestion_service._extract_metadata(node)
         assert success
         assert processed_node.metadata["questions"] == ["Q1"]
@@ -136,23 +132,21 @@ class TestIngestionService:
     @pytest.mark.asyncio
     async def test_extract_metadata_failure(self, ingestion_service, mock_llm_client):
         node = TextNode(id_="1", text="Content")
-        mock_llm_client.chat.completions.create.side_effect = Exception("Error")
+        mock_llm_client.generate_completion.side_effect = Exception("Error")
         processed_node, success = await ingestion_service._extract_metadata(node)
         assert not success
 
     @pytest.mark.asyncio
     async def test_process_nodes_success(self, ingestion_service, mock_llm_client):
         nodes = [TextNode(id_="1", text="Content")]
-        mock_llm_client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=MagicMock(content='{"questions": ["Q1"]}'))]
-        )
+        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
         processed = await ingestion_service._process_nodes(nodes)
         assert len(processed) == 1
 
     @pytest.mark.asyncio
     async def test_process_nodes_high_failure_rate(self, ingestion_service, mock_llm_client):
         nodes = [TextNode(id_="1", text="Content")] * 10
-        mock_llm_client.chat.completions.create.side_effect = Exception("Error")
+        mock_llm_client.generate_completion.side_effect = Exception("Error")
         with pytest.raises(Exception, match="High failure rate"):
             await ingestion_service._process_nodes(nodes)
 
@@ -192,7 +186,8 @@ class TestIngestionService:
         vector = ingestion_service._node_to_vector(node)
         assert vector["id"] == "1"
         assert vector["values"] == [0.1]
-        assert vector["metadata"] == {"key": "value"}
+        assert vector["metadata"]["key"] == "value"
+        assert vector["metadata"]["node_content"] == "Content"
 
     @pytest.mark.asyncio
     async def test_upsert_nodes(self, ingestion_service, mock_vector_client):
@@ -226,9 +221,7 @@ class TestIngestionService:
         # Mock all steps
         mock_reader.load_data.return_value = [Document(text="Content")]
         mock_node_parser.get_nodes_from_documents.return_value = [TextNode(id_="1", text="Content")]
-        mock_llm_client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=MagicMock(content='{"questions": ["Q1"]}'))]
-        )
+        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
         mock_embedding_client.embed_document.return_value = [0.1]
         mock_vector_client.upsert = AsyncMock()
 
@@ -237,6 +230,6 @@ class TestIngestionService:
         # Verify calls
         mock_reader.load_data.assert_called_once_with("test.pdf")
         mock_node_parser.get_nodes_from_documents.assert_called_once()
-        mock_llm_client.chat.completions.create.assert_called_once()
+        mock_llm_client.generate_completion.assert_called_once()
         mock_embedding_client.embed_document.assert_called()
         mock_vector_client.upsert.assert_called()

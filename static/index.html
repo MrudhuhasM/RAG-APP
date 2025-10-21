@@ -1,0 +1,85 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Assistant - Technical Documentation Q&A</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1> RAG Assistant</h1>
+                <p class="subtitle">Technical Documentation Question & Answer System</p>
+            </div>
+        </header>
+
+        <main>
+            <!-- Upload Section -->
+            <section class="upload-section">
+                <h2> Upload Documentation</h2>
+                <div class="upload-container">
+                    <div class="upload-area" id="uploadArea">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="upload-text">Drop PDF file here or click to browse</p>
+                        <p class="upload-hint">Maximum file size: 10MB</p>
+                        <input type="file" id="fileInput" accept=".pdf" hidden>
+                    </div>
+                    <div class="upload-status" id="uploadStatus"></div>
+                </div>
+            </section>
+
+            <!-- Query Section -->
+            <section class="query-section">
+                <h2> Ask a Question</h2>
+                <div class="query-container">
+                    <div class="query-input-wrapper">
+                        <textarea 
+                            id="queryInput" 
+                            placeholder="Ask anything about your uploaded documentation..."
+                            rows="3"
+                        ></textarea>
+                        <button id="askButton" class="primary-button">
+                            <span class="button-text">Ask Question</span>
+                            <span class="button-loader" style="display: none;">
+                                <span class="spinner"></span>
+                                Processing...
+                            </span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <h2> Answer</h2>
+                <div class="answer-container">
+                    <div class="answer-content" id="answerContent"></div>
+                    
+                    <div class="sources-container" id="sourcesContainer">
+                        <h3> Sources</h3>
+                        <div id="sourcesList"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Chat History -->
+            <section class="history-section" id="historySection" style="display: none;">
+                <h2> Recent Questions</h2>
+                <div class="history-list" id="historyList"></div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by RAG  FastAPI  Pinecone</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
