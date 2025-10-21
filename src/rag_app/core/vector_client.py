@@ -1,6 +1,7 @@
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import PineconeAsyncio, ServerlessSpec
 from pinecone.exceptions import PineconeException
 
 logger = logging.getLogger(__name__)
@@ -43,21 +44,41 @@ class VectorClient:
         self.cloud = cloud
         self.region = region
 
-        try:
-            self.pc = Pinecone(api_key=api_key)
-            self.spec = ServerlessSpec(cloud=cloud, region=region)
-            self.index = self._ensure_index()
-            logger.info(f"VectorClient initialized for index '{index_name}'")
-        except PineconeException as e:
-            logger.error(f"Failed to initialize Pinecone client: {e}")
-            raise
+        self.pc = PineconeAsyncio(api_key=api_key)
+        self.spec = ServerlessSpec(cloud=cloud, region=region)
+        self.index: Optional[Any] = None  # Will be set in create
 
-    def _ensure_index(self):
+    @classmethod
+    async def create(
+        cls,
+        api_key: str,
+        environment: str,
+        index_name: str,
+        dimension: int = 1536,
+        metric: str = "cosine",
+        cloud: str = "aws",
+        region: str = "us-east-1"
+    ):
+        """
+        Asynchronously create and initialize the VectorClient.
+
+        Args:
+            Same as __init__
+
+        Returns:
+            Initialized VectorClient instance
+        """
+        instance = cls(api_key, environment, index_name, dimension, metric, cloud, region)
+        instance.index = await instance._ensure_index_async()
+        logger.info(f"VectorClient initialized for index '{index_name}'")
+        return instance
+
+    async def _ensure_index_async(self):
         """Ensure the index exists, create if it doesn't."""
         try:
-            if not self.pc.has_index(self.index_name):
+            if not await self.pc.has_index(self.index_name):
                 logger.info(f"Creating index '{self.index_name}' with dimension {self.dimension}")
-                self.pc.create_index(
+                await self.pc.create_index(
                     name=self.index_name,
                     dimension=self.dimension,
                     metric=self.metric,
@@ -67,12 +88,12 @@ class VectorClient:
                 logger.info(f"Index '{self.index_name}' created successfully")
             else:
                 logger.info(f"Index '{self.index_name}' already exists")
-            return self.pc.Index(self.index_name)
+            return self.pc.IndexAsyncio(self.index_name)
         except PineconeException as e:
             logger.error(f"Failed to create/ensure index: {e}")
             raise
 
-    def upsert(
+    async def upsert(
         self,
         vectors: List[Any],
         namespace: str = "",
@@ -94,7 +115,7 @@ class VectorClient:
             # Split into batches to avoid payload size limits
             for i in range(0, len(vectors), batch_size):
                 batch = vectors[i:i + batch_size]
-                self.index.upsert(vectors=batch, namespace=namespace)
+                await self.index.upsert(vectors=batch, namespace=namespace)
                 logger.debug(f"Upserted batch of {len(batch)} vectors to namespace '{namespace}'")
 
             logger.info(f"Successfully upserted {len(vectors)} vectors to namespace '{namespace}'")
@@ -102,7 +123,7 @@ class VectorClient:
             logger.error(f"Failed to upsert vectors: {e}")
             raise
 
-    def query(
+    async def query(
         self,
         vector: List[float],
         top_k: int = 10,
@@ -126,7 +147,7 @@ class VectorClient:
             Query results dict
         """
         try:
-            results = self.index.query(
+            results = await self.index.query(
                 vector=vector,
                 top_k=top_k,
                 namespace=namespace,
@@ -140,7 +161,7 @@ class VectorClient:
             logger.error(f"Failed to query vectors: {e}")
             raise
 
-    def delete(
+    async def delete(
         self,
         ids: Optional[List[str]] = None,
         namespace: str = "",
@@ -156,10 +177,10 @@ class VectorClient:
         """
         try:
             if delete_all:
-                self.index.delete(delete_all=True, namespace=namespace)
+                await self.index.delete(delete_all=True, namespace=namespace)
                 logger.info(f"Deleted all vectors in namespace '{namespace}'")
             elif ids:
-                self.index.delete(ids=ids, namespace=namespace)
+                await self.index.delete(ids=ids, namespace=namespace)
                 logger.info(f"Deleted {len(ids)} vectors from namespace '{namespace}'")
             else:
                 logger.warning("No ids or delete_all specified for delete operation")
@@ -167,7 +188,7 @@ class VectorClient:
             logger.error(f"Failed to delete vectors: {e}")
             raise
 
-    def get_index_stats(self) -> Any:
+    async def get_index_stats(self) -> Any:
         """
         Get statistics about the index.
 
@@ -175,14 +196,14 @@ class VectorClient:
             Index stats dict
         """
         try:
-            stats = self.index.describe_index_stats()
+            stats = await self.index.describe_index_stats()
             logger.debug(f"Retrieved index stats: {stats}")
             return stats
         except PineconeException as e:
             logger.error(f"Failed to get index stats: {e}")
             raise
 
-    def list_namespaces(self) -> List[str]:
+    async def list_namespaces(self) -> List[str]:
         """
         List all namespaces in the index.
 
@@ -190,7 +211,7 @@ class VectorClient:
             List of namespace names
         """
         try:
-            stats = self.get_index_stats()
+            stats = await self.get_index_stats()
             namespaces = list(stats.namespaces.keys()) if stats.namespaces else []
             logger.debug(f"Found namespaces: {namespaces}")
             return namespaces

@@ -9,7 +9,7 @@ from rag_app.config.settings import settings
 from rag_app.config.logging import logger
 from rag_app.embeddings.base import BaseEmbeddingModel
 
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from google import genai
 
 def get_chunk_embeddings() -> BaseEmbedding:
@@ -29,7 +29,7 @@ def get_chunk_embeddings() -> BaseEmbedding:
 def get_embed_model() -> BaseEmbeddingModel:
     if settings.embedding.provider == "openai":
         logger.info("Initializing OpenAI Embedding Model")
-        client = OpenAI(api_key=settings.openai.api_key)
+        client = AsyncOpenAI(api_key=settings.openai.api_key)
         return OpenAIEmbeddingModel(_client=client)
     elif settings.embedding.provider == "gemini":
         logger.info("Initializing Gemini Embedding Model")
@@ -37,7 +37,7 @@ def get_embed_model() -> BaseEmbeddingModel:
         return GeminiEmbeddingModel(_client=client)
     elif settings.embedding.provider == "local":
         logger.info("Initializing Local Models Embedding Model")
-        client = OpenAI(base_url=settings.local_models.embedding_base_url,api_key="test")
+        client = AsyncOpenAI(base_url=settings.local_models.embedding_base_url, api_key="test")
         return OpenAIEmbeddingModel(_client=client)
     else:
         raise ValueError(f"Unsupported embedding provider: {settings.embedding.provider}")
