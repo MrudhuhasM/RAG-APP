@@ -9,10 +9,10 @@
 - [ ] Set up local development with docker-compose.yml
 
 ## Document Ingestion Pipeline
-- [ ] Implement markdown/HTML parser for documentation
-- [ ] Add intelligent chunking (respect headers, code blocks, tables)
-- [ ] Integrate embedding generation (OpenAI/Cohere)
-- [ ] Set up vector database (Pinecone/Weaviate/Qdrant)
+- [x] Implement PDF parser for documentation
+- [x] Add intelligent chunking (respect headers, code blocks, tables)
+- [x] Integrate embedding generation (OpenAI/Cohere)
+- [x] Set up vector database (Pinecone/Weaviate/Qdrant)
 - [ ] Implement cloud storage for raw documents
 - [ ] Create metadata storage (SQLite/PostgreSQL for doc sets/history)
 - [ ] Build POST /ingest endpoint for uploading/processing docs
@@ -32,7 +32,7 @@
 - [ ] Add error handling for malformed questions/no relevant docs
 
 ## Testing and Validation
-- [ ] Ingest at least 100 pages of documentation without errors
+- [x] Ingest at least 100 pages of documentation without errors
 - [ ] Manually verify answers for 8/10 test questions
 - [ ] Ensure response time under 10 seconds
 - [ ] Test edge cases (multi-part questions, hallucinations)
