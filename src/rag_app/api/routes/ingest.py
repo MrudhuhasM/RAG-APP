@@ -1,17 +1,30 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, BackgroundTasks
 import tempfile
 import os
 import logging
-from typing import Annotated
+from typing import Annotated, Dict, Any
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import SemanticSplitterNodeParser
 from rag_app.services.ingest import IngestionService
 from rag_app.config.settings import settings
+from pydantic import BaseModel
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+class IngestRequest(BaseModel):
+    source_name: str
+    source_uri: str
+    source_type: str
+    source_config: Dict[str, Any] = {}
+
+
+class IngestResponse(BaseModel):
+    message: str
+    task_id: str
+
 
 # Dependency for IngestionService using app state singletons
 async def get_ingestion_service(request: Request) -> IngestionService:
@@ -29,10 +42,11 @@ async def get_ingestion_service(request: Request) -> IngestionService:
         vector_client=request.app.state.vector_client
     )
 
-@router.post("/ingest")
+@router.post("/ingest", response_model=IngestResponse)
 async def ingest_file(
     request: Request,
-    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),    
     ingestion_service: IngestionService = Depends(get_ingestion_service)
 ):
     """Ingest a PDF document into the vector database."""
@@ -65,12 +79,16 @@ async def ingest_file(
             "Starting ingestion",
             extra={"filename": file.filename, "size": len(content), "request_id": request_id}
         )
-        await ingestion_service.ingest(temp_path)
-        logger.info(
-            "Ingestion completed",
-            extra={"filename": file.filename, "request_id": request_id}
+        background_tasks.add_task(
+            ingestion_service.ingest,
+            source_name=request.source_name,
+            source_uri=request.source_uri,
+            source_type=request.source_type,
+            source_config=request.source_config,
+            request_id=request_id,
         )
-        return {"message": "Ingestion completed successfully", "file": file.filename}
+
+        return IngestResponse(message="Ingestion started", task_id=request_id)
     except Exception as e:
         request_id = getattr(request.state, 'request_id', 'unknown')
         logger.error(

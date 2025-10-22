@@ -305,8 +305,11 @@ class RagService:
 
             logger.info("Retrieving relevant documents from vector store.")
             yield {"type": "status", "data": "Retrieving relevant documents."}
-            results = await self.retrieve_documents(query_embedding, top_k=10)
-            question_results = await self.retrieve_documents(query_embedding, top_k=20, namespace=settings.pinecone.questions_namespace )
+
+            doc_task = self.retrieve_documents(query_embedding, top_k=10)
+            question_task = self.retrieve_documents(query_embedding, top_k=20, namespace=settings.pinecone.questions_namespace)
+
+            results, question_results = await asyncio.gather(doc_task, question_task)
             logger.info(f"Retrieved {len(results)} relevant documents and {len(question_results)} relevant questions.")
             
             total_results = results + question_results

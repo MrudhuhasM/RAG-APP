@@ -224,9 +224,10 @@ class IngestionService:
             logger.info("No questions to upsert.")
     
 
-    async def ingest(self, file_path: str):
+    async def ingest(self, source_name: str, source_uri: str, source_type: str, source_config: dict, request_id: str) -> list[BaseNode]:
         start = time.time()
-        documents = await self._ingest_file(file_path)
+        logger.info(f"Ingestion started for source: {source_name}, URI: {source_uri}, Type: {source_type}, Request ID: {request_id}")
+        documents = await self._ingest_file(source_uri)
         documents = await self._preprocess_documents(documents)
         nodes = await self._chunk_documents(documents)
         nodes = await self._process_nodes(nodes)
@@ -234,5 +235,5 @@ class IngestionService:
         await self._upsert_nodes(nodes)
         await self._upsert_questions(nodes)
         end = time.time()
-        logger.info(f"Ingestion completed in {end - start:.2f} seconds")
+        logger.info(f"Ingestion completed for source: {source_name}, URI: {source_uri}, Type: {source_type}, Request ID: {request_id} in {end - start:.2f} seconds")
         return nodes
