@@ -25,11 +25,19 @@ class AnswerResponse(BaseModel):
 # Dependency for RagService using app state singletons
 async def get_rag_service(request: Request) -> RagService:
     """Get RagService using app state singletons."""
+    
+    if request.app.state.cache_client is None:
+        logger.error("Cache client not initialized in app state")
+        raise HTTPException(status_code=500, detail="Cache client not initialized")
+
+
     return RagService(
         embed_model=request.app.state.embed_model,
         vector_client=request.app.state.vector_client,
         llm_model=request.app.state.llm_model,
-        encoder_model=request.app.state.reranker
+        encoder_model=request.app.state.reranker,
+        cache_client=request.app.state.cache_client
+
     )
 
 @router.post("/query", response_model=AnswerResponse, tags=["RAG"])

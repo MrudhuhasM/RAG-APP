@@ -16,6 +16,7 @@ from rag_app.config.settings import settings
 from rag_app.embeddings import get_embed_model, get_chunk_embeddings
 from rag_app.llm import get_llm_model
 from rag_app.core.vector_client import VectorClient
+from rag_app.core.cache_client import CacheClient
 
 
 @asynccontextmanager
@@ -34,6 +35,14 @@ async def lifespan(app: FastAPI):
             cloud=settings.pinecone.cloud,
             region=settings.pinecone.region
         )
+
+        app.state.cache_client = await CacheClient.create(
+            host=settings.redis.host,
+            port=settings.redis.port,
+            db=settings.redis.db,
+            ttl_seconds=settings.redis.ttl_seconds,
+            embedding_ttl_seconds=settings.redis.embedding_ttl_seconds
+        )
         
         logger.info("Loading reranker model...")
         app.state.reranker = CrossEncoder(settings.reranker.model)
@@ -48,6 +57,11 @@ async def lifespan(app: FastAPI):
         raise
     
     yield
+
+    if hasattr(app.state, "vector_client"):
+        pass
+    if hasattr(app.state, "cache_client"):
+        await app.state.cache_client.close()
     
     # Cleanup on shutdown
     logger.info("Shutting down RAG App")
