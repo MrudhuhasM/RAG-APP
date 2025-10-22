@@ -6,6 +6,7 @@ from rag_app.config.settings import settings
 from rag_app.llm.base import BaseLLMModel
 import time
 import json
+import uuid
 import asyncio
 from sentence_transformers import CrossEncoder
 from typing import AsyncGenerator
@@ -46,6 +47,63 @@ class RagService:
         except Exception as e:
             logger.error(f"Reranking failed: {e}")
             return contexts[:top_k]
+
+    async def _check_semantic_cache(self, query_emb: list[float]) -> list[dict]:
+        try:
+            logger.debug("Checking semantic cache for relevant documents.")
+            results = await self._vector_client.query(
+                vector=query_emb,
+                top_k=1,
+                include_metadata=True,
+                namespace=settings.pinecone.semantic_cache_namespace
+            )
+
+            if not results['matches']:
+                logger.debug("No matches found in semantic cache.")
+                return []
+
+            top_match = results['matches'][0]
+            if top_match['score'] >= settings.semantic_threshold:
+                logger.info(f"Semantic cache hit with score: {top_match['score']}")
+                redis_key = top_match['metadata'].get('redis_key')
+                if not redis_key:
+                    logger.warning("No redis_key found in semantic cache metadata.")
+                    return []
+                
+                cached_data = await self._cache_client.get(redis_key)
+                if cached_data:
+                    logger.info("Retrieved data from Redis cache based on semantic cache hit.")
+                    return cached_data
+                else:
+                    logger.warning("No data found in Redis for the given redis_key.")
+                    return []
+                
+            logger.debug("Semantic cache miss based on threshold.")
+            return []       
+
+        except Exception as e:
+            logger.error(f"Semantic cache check failed: {e}")
+            return []
+        
+    
+    async def _add_to_semantic_cache(self, query_emb: list[float], redis_key: str) -> None:
+
+        try:
+            vector_id = str(uuid.uuid4())
+            await self._vector_client.upsert(
+                vectors=[{
+                    'id': vector_id,
+                    'values': query_emb,
+                    'metadata': {'redis_key': redis_key}
+                }],
+                namespace=settings.pinecone.semantic_cache_namespace
+            )
+            logger.info(f"Added new entry to semantic cache with vector ID: {vector_id}")
+        except Exception as e:
+            logger.error(f"Adding to semantic cache failed: {e}")
+            return
+
+
 
     async def query_rewriter(self, query: str) -> str:
         """
@@ -236,6 +294,15 @@ class RagService:
                 query_embedding = await self._embed_model.embed_document(rewritten_query)
                 await self._cache_client.set(embedding_cache_key, query_embedding, is_embedding=True)
 
+            semantic_cached_results = await self._check_semantic_cache(query_embedding)
+            if semantic_cached_results:
+                await self._cache_client.set(cache_key, {"answer": semantic_cached_results['answer'], "sources": semantic_cached_results['sources']})
+
+                logger.info("Returning answer from semantic cache.")
+                yield {"type": "token", "data": semantic_cached_results['answer']}
+                yield {"type": "sources", "data": semantic_cached_results['sources']}
+                return
+
             logger.info("Retrieving relevant documents from vector store.")
             yield {"type": "status", "data": "Retrieving relevant documents."}
             results = await self.retrieve_documents(query_embedding, top_k=10)
@@ -262,6 +329,7 @@ class RagService:
             answer_text = ''.join(full_answer)
             # Cache the final answer and sources
             await self._cache_client.set(cache_key, {"answer": answer_text, "sources": final_results})
+            await self._add_to_semantic_cache(query_embedding, cache_key)
             logger.info("Final answer and sources cached.")
                 
             yield {"type": "sources", "data": final_results}

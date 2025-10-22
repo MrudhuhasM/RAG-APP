@@ -61,6 +61,7 @@ class PineconeSettings(BaseSettings):
     region: str = "us-east-1"
     environment: str = "dev"
     questions_namespace: str = "questions"
+    semantic_cache_namespace: str = "semantic-cache"
 
     model_config = SettingsConfigDict(env_prefix="PINECONE_")
     
@@ -105,6 +106,8 @@ class Settings(BaseSettings):
     # HTTP Client Timeouts
     http_timeout: float = 30.0
     embedding_timeout: float = 20.0
+
+    semantic_threshold: float = Field(default=0.85, description="Threshold for semantic similarity")
 
     # Nested settings - Pydantic will auto-populate from env vars
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
