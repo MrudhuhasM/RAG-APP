@@ -1,9 +1,11 @@
 from rag_app.embeddings.base import BaseEmbeddingModel
 from rag_app.core.vector_client import VectorClient
+from rag_app.core.cache_client import CacheClient
 from rag_app.config.logging import logger
 from rag_app.config.settings import settings
 from rag_app.llm.base import BaseLLMModel
 import time
+import json
 import asyncio
 from sentence_transformers import CrossEncoder
 from typing import AsyncGenerator
@@ -13,12 +15,14 @@ class RagService:
                  embed_model: BaseEmbeddingModel,
                  vector_client: VectorClient,
                  llm_model: BaseLLMModel,
-                 encoder_model: CrossEncoder):
+                 encoder_model: CrossEncoder,
+                 cache_client: CacheClient):
         
         self._embed_model: BaseEmbeddingModel = embed_model
         self._vector_client: VectorClient = vector_client
         self._llm_model: BaseLLMModel = llm_model
         self._reranker: CrossEncoder = encoder_model
+        self._cache_client: CacheClient = cache_client
 
     async def rerank(self,query: str, contexts: list[dict], top_k: int = 5) -> list[dict]:
         """
@@ -208,6 +212,15 @@ class RagService:
             yield {"type": "error", "data": "Please provide a valid query."}
         
         try:
+            cache_key = f"rag_answer:{query}"
+            result_cache = await self._cache_client.get(cache_key)
+            if result_cache:
+                logger.info("Cache hit for query.")
+                yield {"type": "status", "data": "Fetching answer from cache."}
+                yield {"type": "token", "data": result_cache['answer']}
+                yield {"type": "sources", "data": result_cache['sources']}
+                return
+            logger.info("Cache miss for query.")
             start_time = time.time()
             logger.info(f"Starting RAG retrieval for query: {query}")
             yield {"type": "status", "data": "Rewriting query."}
@@ -216,7 +229,12 @@ class RagService:
 
             logger.info("Generating embedding for rewritten query.")
             yield {"type": "status", "data": "Generating query embedding."}
-            query_embedding = await self._embed_model.embed_document(rewritten_query)
+            embedding_cache_key = f"embedding:{rewritten_query}"
+            query_embedding = await self._cache_client.get(embedding_cache_key)
+            if not query_embedding:
+                logger.info("Embedding cache miss, generating new embedding.")
+                query_embedding = await self._embed_model.embed_document(rewritten_query)
+                await self._cache_client.set(embedding_cache_key, query_embedding, is_embedding=True)
 
             logger.info("Retrieving relevant documents from vector store.")
             yield {"type": "status", "data": "Retrieving relevant documents."}
@@ -236,8 +254,15 @@ class RagService:
 
             logger.info("Generating final answer from top contexts.")
             yield {"type": "status", "data": "Generating final answer."}            
+            full_answer = []
             async for chunk in self.generate_answer(rewritten_query, final_results):
+                full_answer.append(chunk)
                 yield {"type": "token", "data": chunk}
+
+            answer_text = ''.join(full_answer)
+            # Cache the final answer and sources
+            await self._cache_client.set(cache_key, {"answer": answer_text, "sources": final_results})
+            logger.info("Final answer and sources cached.")
                 
             yield {"type": "sources", "data": final_results}
             elapsed_time = time.time() - start_time

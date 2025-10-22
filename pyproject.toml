@@ -18,6 +18,7 @@ dependencies = [
     "pinecone[asyncio]>=7.3.0",
     "pydantic-settings>=2.0.0",
     "pymupdf>=1.26.5",
+    "redis[hiredis]>=6.4.0",
     "sentence-transformers>=5.1.1",
     "tenacity>=8.2.0",
     "tqdm>=4.66.0",

@@ -77,6 +77,15 @@ class RerankerSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="RERANKER_")
 
+class RedisSettings(BaseSettings):
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+    ttl_seconds: Optional[int] = None  # Optional TTL for cached items
+    embedding_ttl_seconds: Optional[int] = None  # Optional TTL for embeddings
+
+    model_config = SettingsConfigDict(env_prefix="REDIS_")
+
 
 class Settings(BaseSettings):
 
@@ -105,6 +114,7 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     pinecone: PineconeSettings = Field(default_factory=PineconeSettings)
     reranker: RerankerSettings = Field(default_factory=RerankerSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
 
     model_config = SettingsConfigDict(
         env_file=".env", 

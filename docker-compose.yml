@@ -48,6 +48,14 @@
       
       # Reranker Model
       - RERANKER__MODEL=${RERANKER_MODEL:-BAAI/bge-reranker-base}
+
+      #REDIS
+      - REDIS__HOST=${REDIS_HOST:-redis}
+      - REDIS__PORT=${REDIS_PORT:-6379}
+      - REDIS__DB=${REDIS_DB:-0}
+      - REDIS__TTL_SECONDS=${REDIS_TTL_SECONDS:-3600}
+      - REDIS__EMBEDDING_TTL_SECONDS=${REDIS_EMBEDDING_TTL_SECONDS:-86400}
+
     
     volumes:
       # Mount logs directory for persistence
@@ -64,6 +72,30 @@
     
     networks:
       - rag-network
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+volumes:
+  redis-data:
 
 networks:
   rag-network:
