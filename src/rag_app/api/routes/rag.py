@@ -30,7 +30,8 @@ async def get_rag_service(request: Request) -> RagService:
         vector_client=request.app.state.vector_client,
         llm_model=request.app.state.llm_model,
         encoder_model=request.app.state.reranker,
-        cache_client=request.app.state.cache_client
+        cache_client=request.app.state.cache_client,
+        router=request.app.state.router
 
     )
 

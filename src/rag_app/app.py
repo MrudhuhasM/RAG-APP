@@ -17,6 +17,7 @@ from rag_app.embeddings import get_embed_model, get_chunk_embeddings
 from rag_app.llm import get_llm_model
 from rag_app.core.vector_client import VectorClient
 from rag_app.core.cache_client import CacheClient
+from rag_app.services.router import QueryRouter
 
 
 @asynccontextmanager
@@ -50,6 +51,10 @@ async def lifespan(app: FastAPI):
         app.state.embed_model = get_embed_model()
         app.state.chunk_embed_model = get_chunk_embeddings()
         app.state.llm_model = get_llm_model()
+        
+        # Initialize query router with a classification LLM (use default LLM for classification)
+        logger.info("Initializing Query Router...")
+        app.state.router = QueryRouter(llm_model=app.state.llm_model)
         
         # Initialize ingestion status tracker (in-memory dict)
         app.state.ingestion_status = {}

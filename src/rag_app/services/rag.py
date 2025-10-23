@@ -9,8 +9,10 @@ import json
 import uuid
 import asyncio
 from sentence_transformers import CrossEncoder
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from rag_app.utils.tokenizer import count_tokens, get_tokenizer
+from rag_app.services.router import QueryRouter
+from rag_app.llm import get_llm_model_by_provider
 
 class RagService:
     def __init__(self,
@@ -18,13 +20,54 @@ class RagService:
                  vector_client: VectorClient,
                  llm_model: BaseLLMModel,
                  encoder_model: CrossEncoder,
-                 cache_client: CacheClient):
+                 cache_client: CacheClient,
+                 router: Optional[QueryRouter] = None):
         
         self._embed_model: BaseEmbeddingModel = embed_model
         self._vector_client: VectorClient = vector_client
         self._llm_model: BaseLLMModel = llm_model
         self._reranker: CrossEncoder = encoder_model
         self._cache_client: CacheClient = cache_client
+        self._router: Optional[QueryRouter] = router
+        self._available_models: dict[str, BaseLLMModel] = {}  # Cache for dynamically loaded models
+
+    async def _get_llm_for_query(self, query: str) -> BaseLLMModel:
+        """
+        Determine which LLM model to use for the given query.
+        If router is available, route the query. Otherwise, use default LLM.
+        
+        Args:
+            query (str): The user query.
+            
+        Returns:
+            BaseLLMModel: The selected LLM model instance.
+        """
+        if self._router is None:
+            logger.debug("No router available, using default LLM model")
+            return self._llm_model
+        
+        try:
+            logger.info("Starting query routing to select optimal LLM model")
+            # Route the query to determine the provider
+            provider = await self._router.route_query(query)
+            logger.info(f"✓ Router selected provider: '{provider}'")
+            
+            # Return cached model if available
+            if provider in self._available_models:
+                logger.debug(f"Using cached LLM model for provider: {provider}")
+                return self._available_models[provider]
+            
+            # Load and cache the model
+            logger.info(f"Loading new LLM model for provider: {provider}")
+            model = get_llm_model_by_provider(provider)
+            self._available_models[provider] = model
+            logger.info(f"✓ Successfully loaded and cached model: {model.model_name}")
+            return model
+            
+        except Exception as e:
+            logger.error(f"✗ Query routing failed with error: {type(e).__name__}: {e}")
+            logger.warning(f"Falling back to default LLM model: {self._llm_model.model_name}")
+            return self._llm_model
 
     async def rerank(self,query: str, contexts: list[dict], top_k: int = 5) -> list[dict]:
         """
@@ -260,13 +303,14 @@ class RagService:
                 break
         return "\n\n".join(context_parts)
     
-    async def generate_answer(self, query: str, contexts: list[dict]) -> AsyncGenerator[str, None]:
+    async def generate_answer(self, query: str, contexts: list[dict], llm_model: BaseLLMModel) -> AsyncGenerator[str, None]:
         """
-        Generates a final answer based on the top contexts.
+        Generates a final answer based on the top contexts using the provided LLM model.
 
         Args:
             query (str): The user query.
             contexts (list[dict]): The list of context documents.
+            llm_model (BaseLLMModel): The LLM model to use for generation.
 
         Returns:
             str: The generated answer.
@@ -278,7 +322,9 @@ class RagService:
         if not query:
             yield "Please provide a valid query."
         
-        try:        
+        try:
+            logger.info(f"Using LLM model: {llm_model.model_name}")
+            
             context_texts = self.build_context_with_limit(contexts, 5000)
             prompt = f"""
             You are an advanced AI assistant tasked with answering questions based strictly on the provided contexts.
@@ -297,7 +343,7 @@ class RagService:
                 {"role": "user", "content": prompt}
             ]
             
-            async for chunk in self._llm_model.stream_completion(messages=messages):
+            async for chunk in llm_model.stream_completion(messages=messages):
                 yield chunk
 
         except Exception as e:
@@ -322,7 +368,7 @@ class RagService:
 
         input_tokens = 0 
         output_tokens = 0
-        model_name = self._llm_model.model_name
+        model_name = "unknown"  # Will be set after routing
 
         try:
             input_tokens = count_tokens(query)
@@ -385,7 +431,13 @@ class RagService:
             logger.info("Generating final answer from top contexts.")
             yield {"type": "status", "data": "Generating final answer."}            
             full_answer = []
-            async for chunk in self.generate_answer(rewritten_query, final_results):
+            
+            # Get the LLM model that will be used (for cost tracking) - ONLY ONCE!
+            selected_llm = await self._get_llm_for_query(rewritten_query)
+            model_name = selected_llm.model_name
+            logger.info(f"Selected model for answer generation: {model_name}")
+            
+            async for chunk in self.generate_answer(rewritten_query, final_results, selected_llm):
                 full_answer.append(chunk)
                 yield {"type": "token", "data": chunk}
 
