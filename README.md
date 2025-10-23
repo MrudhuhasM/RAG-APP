@@ -17,11 +17,13 @@ A **Retrieval-Augmented Generation (RAG)** system that processes technical docum
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Performance Metrics](#performance-metrics)
+- [Performance Dashboard](#performance-dashboard)
 - [Configuration](#configuration)
 - [API Documentation](#api-documentation)
 - [Docker Deployment](#docker-deployment)
 - [Design Decisions](#design-decisions)
 - [Tech Stack](#tech-stack)
+- [Testing](#testing)
 
 ---
 
@@ -73,6 +75,8 @@ This RAG system demonstrates production-grade engineering practices in a focused
 - **Resource Management**: Singleton pattern prevents per-request initialization overhead
 - **Retry Logic**: Exponential backoff (3 attempts, 4-10s delays) on transient failures
 - **Observability**: Request tracing, structured logging, component health checks
+- **Performance Monitoring**: Real-time metrics tracking with automated benchmarking
+- **Interactive Dashboard**: Visual performance analytics at `/dashboard`
 - **12-Factor Compliance**: Environment-based configuration, stateless compute
 
 ---
@@ -168,7 +172,9 @@ uv run fastapi dev src/rag_app/app.py
 
 **Access Points:**
 - Web UI: http://localhost:8000
+- Performance Dashboard: http://localhost:8000/dashboard
 - API Docs: http://localhost:8000/docs
+- Metrics API: http://localhost:8000/api/v1/metrics
 - Health Check: http://localhost:8000/api/v1/health
 
 ---
@@ -219,6 +225,74 @@ Query Costs (from logs):
 | Semantic cache hit | N/A | <800ms | **New capability** |
 
 *Note: All these metrics are from locally run model llamacpp gemma3-4b on a 6GB VRAM*
+
+---
+
+## Performance Dashboard
+
+The system includes a **real-time performance dashboard** for monitoring and analyzing RAG pipeline performance.
+
+### Access the Dashboard
+
+```bash
+# Start the application
+uv run fastapi dev src/rag_app/app.py
+
+# Open in browser
+http://localhost:8000/dashboard
+```
+
+### Dashboard Features
+
+- **Key Metrics Cards**: Total queries, average latency, cache hit rate, cost per query
+- **Component Breakdown**: Visual pie chart showing time spent in each pipeline stage
+- **Cache Effectiveness**: Bar chart comparing hit rates across cache tiers
+- **Provider Distribution**: Doughnut chart showing LLM provider usage
+- **Cost Analysis**: Bar chart tracking costs by provider
+- **Latency Distribution**: P50, P95, P99 percentile visualization
+- **Auto-refresh**: Configurable 30-second updates
+
+### Metrics API
+
+Access raw performance data programmatically:
+
+```bash
+# Get comprehensive metrics snapshot
+curl http://localhost:8000/api/v1/metrics?limit=100
+
+# Get aggregated statistics
+curl http://localhost:8000/api/v1/metrics/aggregated
+
+# Get recent query details
+curl http://localhost:8000/api/v1/metrics/recent?limit=10
+```
+
+### Run Benchmarks
+
+Execute automated performance benchmarks:
+
+```bash
+# Run comprehensive benchmark suite
+uv run python scripts/benchmark.py
+
+# View generated performance report
+cat PERFORMANCE.md
+```
+
+The benchmark script:
+- Runs 20+ test queries covering simple to complex scenarios
+- Measures end-to-end latency and component breakdowns
+- Calculates cache effectiveness and cost metrics
+- Generates detailed `PERFORMANCE.md` report
+
+**Example Output:**
+```
+📊 Metrics Summary:
+   - Total Queries: 250
+   - Avg Latency: 4523ms
+   - Cache Hit Rate: 35.2%
+   - Avg Cost: $0.00456
+```
 
 ---
 
@@ -333,6 +407,28 @@ Component-level health status.
 
 ---
 
+#### `GET /api/v1/metrics`
+Real-time performance metrics.
+
+```bash
+curl "http://localhost:8000/api/v1/metrics?limit=100"
+```
+
+Response includes:
+- Last N queries with detailed breakdowns
+- Aggregated statistics (averages, percentiles)
+- Cache hit rates across all tiers
+- Cost tracking by provider
+- Latency distribution (P50, P95, P99)
+
+**Use Cases:**
+- Dashboard data source
+- Monitoring alerts
+- Performance trend analysis
+- Cost optimization
+
+---
+
 ## Docker Deployment
 
 ## Docker Deployment
@@ -441,8 +537,10 @@ class BaseEmbeddingModel(ABC):
 | **Tokenizer** | tiktoken | Token counting for context limits |
 | **Validation** | Pydantic v2 | Type-safe configuration |
 | **Logging** | Loguru | Structured logging |
+| **Monitoring** | Custom Performance Tracker | Real-time metrics collection |
 | **Deployment** | Docker, Docker Compose | Containerized deployment |
 | **Testing** | pytest, pytest-asyncio | Async test framework |
+| **Visualization** | Chart.js | Performance dashboard |
 
 ---
 
@@ -471,6 +569,7 @@ uv run pytest tests/test_router_integration.py -v
 
 - [Docker Deployment Guide](./DOCKER.md) - Containerization and cloud deployment
 - [Architecture Design](./design.md) - System design decisions
+- [Performance Metrics](./PERFORMANCE.md) - Detailed benchmarks and optimization roadmap
 
 
 ---

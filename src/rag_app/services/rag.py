@@ -13,6 +13,8 @@ from typing import AsyncGenerator, Optional
 from rag_app.utils.tokenizer import count_tokens, get_tokenizer
 from rag_app.services.router import QueryRouter
 from rag_app.llm import get_llm_model_by_provider
+from rag_app.monitoring import PerformanceTracker
+from rag_app.schemas.metrics import CacheStatus
 
 class RagService:
     def __init__(self,
@@ -21,7 +23,8 @@ class RagService:
                  llm_model: BaseLLMModel,
                  encoder_model: CrossEncoder,
                  cache_client: CacheClient,
-                 router: Optional[QueryRouter] = None):
+                 router: Optional[QueryRouter] = None,
+                 performance_tracker: Optional[PerformanceTracker] = None):
         
         self._embed_model: BaseEmbeddingModel = embed_model
         self._vector_client: VectorClient = vector_client
@@ -29,6 +32,7 @@ class RagService:
         self._reranker: CrossEncoder = encoder_model
         self._cache_client: CacheClient = cache_client
         self._router: Optional[QueryRouter] = router
+        self._performance_tracker: Optional[PerformanceTracker] = performance_tracker
         self._available_models: dict[str, BaseLLMModel] = {}  # Cache for dynamically loaded models
 
     async def _get_llm_for_query(self, query: str) -> BaseLLMModel:
@@ -361,7 +365,7 @@ class RagService:
 
     async def answer_query(self, query: str) -> AsyncGenerator[dict, None]:
         """
-        Answers a user query using the RAG approach.
+        Answers a user query using the RAG approach with integrated performance tracking.
 
         Args:
             query (str): The user query.
@@ -373,10 +377,27 @@ class RagService:
         if not query:
             logger.warning("Received empty query.")
             yield {"type": "error", "data": "Please provide a valid query."}
+            return
 
+        # Initialize performance tracking if available
+        if self._performance_tracker:
+            async with self._performance_tracker.track_query(query) as perf_ctx:
+                async for result in self._answer_query_impl(query, perf_ctx):
+                    yield result
+        else:
+            # Fallback without performance tracking
+            async for result in self._answer_query_impl(query, None):
+                yield result
+
+    async def _answer_query_impl(self, query: str, perf_ctx=None) -> AsyncGenerator[dict, None]:
+        """Internal implementation of answer_query with optional performance tracking."""
+        
         input_tokens = 0 
         output_tokens = 0
-        model_name = "unknown"  # Will be set after routing
+        model_name = "unknown"
+        provider = "unknown"
+        embedding_cache_hit = False
+        semantic_cache_hit = False
 
         try:
             input_tokens = count_tokens(query)
@@ -388,70 +409,131 @@ class RagService:
             result_cache = await self._cache_client.get(cache_key)
             if result_cache:
                 logger.info("Cache hit for query.")
+                if perf_ctx:
+                    perf_ctx.set_cache_status(CacheStatus.HIT)
+                    perf_ctx.set_tokens(input_tokens, 0)
+                    perf_ctx.set_model("cached", "cache", False)
+                    perf_ctx.set_document_counts(0, 0, len(result_cache.get('sources', [])))
+                
                 yield {"type": "status", "data": "Fetching answer from cache."}
                 yield {"type": "token", "data": result_cache['answer']}
                 yield {"type": "sources", "data": result_cache['sources']}
                 return
+            
             logger.info("Cache miss for query.")
-            start_time = time.time()
+            if perf_ctx:
+                perf_ctx.set_cache_status(CacheStatus.MISS)
+            
             logger.info(f"Starting RAG retrieval for query: {query}")
             yield {"type": "status", "data": "Rewriting query."}
             rewritten_query = await self.query_rewriter(query)
             logger.info(f"Rewritten query: {rewritten_query}")
 
+            # Embedding generation with tracking
             logger.info("Generating embedding for rewritten query.")
             yield {"type": "status", "data": "Generating query embedding."}
             embedding_cache_key = f"embedding:{rewritten_query}"
-            query_embedding = await self._cache_client.get(embedding_cache_key)
-            if not query_embedding:
-                logger.info("Embedding cache miss, generating new embedding.")
-                query_embedding = await self._embed_model.embed_document(rewritten_query)
-                await self._cache_client.set(embedding_cache_key, query_embedding, is_embedding=True)
+            
+            if perf_ctx:
+                async with perf_ctx.track_component("embedding"):
+                    query_embedding = await self._cache_client.get(embedding_cache_key)
+                    if not query_embedding:
+                        logger.info("Embedding cache miss, generating new embedding.")
+                        query_embedding = await self._embed_model.embed_document(rewritten_query)
+                        await self._cache_client.set(embedding_cache_key, query_embedding, is_embedding=True)
+                        embedding_cache_hit = False
+                    else:
+                        embedding_cache_hit = True
+            else:
+                query_embedding = await self._cache_client.get(embedding_cache_key)
+                if not query_embedding:
+                    query_embedding = await self._embed_model.embed_document(rewritten_query)
+                    await self._cache_client.set(embedding_cache_key, query_embedding, is_embedding=True)
+                    embedding_cache_hit = False
+                else:
+                    embedding_cache_hit = True
+            
+            if perf_ctx:
+                perf_ctx.set_embedding_cache_hit(embedding_cache_hit)
 
             semantic_cached_results = await self._check_semantic_cache(query_embedding)
             if semantic_cached_results:
+                semantic_cache_hit = True
+                if perf_ctx:
+                    perf_ctx.set_semantic_cache_hit(True)
+                    
                 await self._cache_client.set(cache_key, {"answer": semantic_cached_results['answer'], "sources": semantic_cached_results['sources']})
 
                 logger.info("Returning answer from semantic cache.")
                 yield {"type": "token", "data": semantic_cached_results['answer']}
                 yield {"type": "sources", "data": semantic_cached_results['sources']}
                 return
+            
+            if perf_ctx:
+                perf_ctx.set_semantic_cache_hit(False)
 
+            # Document retrieval with tracking
             logger.info("Retrieving relevant documents from vector store.")
             yield {"type": "status", "data": "Retrieving relevant documents."}
 
-            doc_task = self.retrieve_documents(query_embedding)
-            question_task = self.retrieve_documents(
-                query_embedding, 
-                top_k=settings.retrieval_questions_top_k, 
-                namespace=settings.pinecone.questions_namespace
-            )
-
-            results, question_results = await asyncio.gather(doc_task, question_task)
+            if perf_ctx:
+                async with perf_ctx.track_component("retrieval"):
+                    doc_task = self.retrieve_documents(query_embedding)
+                    question_task = self.retrieve_documents(
+                        query_embedding, 
+                        top_k=settings.retrieval_questions_top_k, 
+                        namespace=settings.pinecone.questions_namespace
+                    )
+                    results, question_results = await asyncio.gather(doc_task, question_task)
+            else:
+                doc_task = self.retrieve_documents(query_embedding)
+                question_task = self.retrieve_documents(
+                    query_embedding, 
+                    top_k=settings.retrieval_questions_top_k, 
+                    namespace=settings.pinecone.questions_namespace
+                )
+                results, question_results = await asyncio.gather(doc_task, question_task)
+            
             logger.info(f"Retrieved {len(results)} relevant documents and {len(question_results)} relevant questions.")
             
             total_results = results + question_results
             final_results = self.format_results(total_results)            
-            
-            # Remove duplicates based on content
             final_results = self.remove_duplicates(final_results)
             
+            num_retrieved = len(final_results)
+            
+            # Reranking with tracking
             logger.info("Reranking the retrieved results.")
             yield {"type": "status", "data": "Reranking retrieved documents."}
-            final_results = await self.rerank(rewritten_query, final_results)
+            
+            if perf_ctx:
+                async with perf_ctx.track_component("reranking"):
+                    final_results = await self.rerank(rewritten_query, final_results)
+            else:
+                final_results = await self.rerank(rewritten_query, final_results)
+            
+            num_reranked = len(final_results)
 
+            # LLM generation with tracking
             logger.info("Generating final answer from top contexts.")
             yield {"type": "status", "data": "Generating final answer."}            
             full_answer = []
             
-            # Get the LLM model that will be used (for cost tracking) - ONLY ONCE!
+            # Get the LLM model that will be used
             selected_llm = await self._get_llm_for_query(rewritten_query)
             model_name = selected_llm.model_name
+            provider = getattr(selected_llm, 'provider', 'unknown')
             logger.info(f"Selected model for answer generation: {model_name}")
             
-            async for chunk in self.generate_answer(rewritten_query, final_results, selected_llm):
-                full_answer.append(chunk)
-                yield {"type": "token", "data": chunk}
+            if perf_ctx:
+                async with perf_ctx.track_component("llm"):
+                    async for chunk in self.generate_answer(rewritten_query, final_results, selected_llm):
+                        full_answer.append(chunk)
+                        yield {"type": "token", "data": chunk}
+            else:
+                async for chunk in self.generate_answer(rewritten_query, final_results, selected_llm):
+                    full_answer.append(chunk)
+                    yield {"type": "token", "data": chunk}
 
             answer_text = ''.join(full_answer)
 
@@ -463,6 +545,7 @@ class RagService:
                 "",
                 " "
             ]
+            
             # Cache the final answer and sources
             if answer_text not in error_responses:
                 await self._cache_client.set(cache_key, {"answer": answer_text, "sources": final_results})
@@ -470,20 +553,22 @@ class RagService:
                 logger.info("Final answer and sources cached.")
                 
             yield {"type": "sources", "data": final_results}
-            elapsed_time = time.time() - start_time
-            logger.info(f"RAG retrieval completed in {elapsed_time:.2f} seconds.")
             
+            # Calculate costs and update performance context
             output_tokens = count_tokens(answer_text)
             model_costs = settings.MODEL_COSTS.get(model_name)
 
             if not model_costs:
                 logger.warning(f"Model costs not defined for model: {model_name}")
 
-            input_cost = (input_tokens / 1000) * model_costs['input'] if model_costs else 0
-            output_cost = (output_tokens / 1000) * model_costs['output'] if model_costs else 0
-            total_cost = input_cost + output_cost
+            if perf_ctx:
+                perf_ctx.set_tokens(input_tokens, output_tokens)
+                perf_ctx.set_model(model_name, provider, self._router is not None)
+                perf_ctx.set_document_counts(num_retrieved, num_reranked, len(final_results))
+                perf_ctx.calculate_cost(settings.MODEL_COSTS)
 
-            logger.info(f"Request Processed: Input tokens {input_tokens}, Output tokens {output_tokens}, Input cost {input_cost}, Output cost {output_cost}, Total cost {total_cost}, Model {model_name}")
         except Exception as e:
-            logger.error(f"Error in answering query: {e}")
+            logger.error(f"Error in answering query: {e}", exc_info=True)
+            if perf_ctx:
+                perf_ctx.set_cache_status(CacheStatus.ERROR)
             yield {"type": "error", "data": "An error occurred while processing your query."}

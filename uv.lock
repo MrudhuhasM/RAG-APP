@@ -2662,6 +2662,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "llama-index" },
     { name = "llama-index-embeddings-gemini" },
     { name = "llama-index-embeddings-openai" },
@@ -2689,6 +2690,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.119.0" },
     { name = "google-genai", specifier = ">=1.45.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "llama-index", specifier = ">=0.10.68" },
     { name = "llama-index-embeddings-gemini", specifier = ">=0.1.8" },
     { name = "llama-index-embeddings-openai", specifier = ">=0.1.11" },

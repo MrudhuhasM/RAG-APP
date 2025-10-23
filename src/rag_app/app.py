@@ -11,6 +11,7 @@ from rag_app.api.routes.health import router as health
 from rag_app.api.routes.root import router as root
 from rag_app.api.routes.ingest import router as ingest
 from rag_app.api.routes.rag import router as rag
+from rag_app.api.routes.metrics import router as metrics
 from rag_app.config.logging import logger
 from rag_app.config.settings import settings
 from rag_app.embeddings import get_embed_model, get_chunk_embeddings
@@ -18,6 +19,7 @@ from rag_app.llm import get_llm_model
 from rag_app.core.vector_client import VectorClient
 from rag_app.core.cache_client import CacheClient
 from rag_app.services.router import QueryRouter
+from rag_app.monitoring import PerformanceTracker
 
 
 @asynccontextmanager
@@ -27,6 +29,9 @@ async def lifespan(app: FastAPI):
     
     # Initialize singletons
     try:
+        # Initialize performance tracker
+        app.state.performance_tracker = await PerformanceTracker.get_instance(max_history=1000)
+        
         app.state.vector_client = await VectorClient.create(
             api_key=settings.pinecone.api_key,
             environment=settings.pinecone.environment,
@@ -129,6 +134,7 @@ app.include_router(root, prefix=API_PREFIX)
 app.include_router(health, prefix=API_PREFIX)
 app.include_router(ingest, prefix=API_PREFIX)
 app.include_router(rag, prefix=API_PREFIX)
+app.include_router(metrics, prefix=API_PREFIX)
 
 # Mount static files
 static_dir = Path(__file__).parent.parent.parent / "static"
@@ -139,6 +145,11 @@ if static_dir.exists():
     async def serve_frontend():
         """Serve the frontend HTML page."""
         return FileResponse(str(static_dir / "index.html"))
+    
+    @app.get("/dashboard")
+    async def serve_dashboard():
+        """Serve the performance dashboard."""
+        return FileResponse(str(static_dir / "dashboard.html"))
     
     logger.info(f"Static files mounted from: {static_dir}")
 else:
