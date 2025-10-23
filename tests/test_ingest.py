@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
 from rag_app.services.ingest import IngestionService
+from rag_app.schemas.metadata import QuestionMetadata
 
 
 @pytest.fixture
@@ -97,9 +98,9 @@ class TestIngestionService:
 
     @pytest.mark.asyncio
     async def test_call_llm_success(self, ingestion_service, mock_llm_client):
-        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
+        mock_llm_client.generate_completion.return_value = QuestionMetadata(questions=["Q1"])
         response = await ingestion_service._call_llm("prompt")
-        assert response == '{"questions": ["Q1"]}'
+        assert response == ["Q1"]
 
     @pytest.mark.asyncio
     async def test_call_llm_failure(self, ingestion_service, mock_llm_client):
@@ -107,24 +108,10 @@ class TestIngestionService:
         response = await ingestion_service._call_llm("prompt")
         assert response is None
 
-    def test_parse_llm_response_valid(self, ingestion_service):
-        response = '{"questions": ["Q1", "Q2"]}'
-        questions = ingestion_service._parse_llm_response(response)
-        assert questions == ["Q1", "Q2"]
-
-    def test_parse_llm_response_with_code_block(self, ingestion_service):
-        response = '```json\n{"questions": ["Q1"]}\n```'
-        questions = ingestion_service._parse_llm_response(response)
-        assert questions == ["Q1"]
-
-    def test_parse_llm_response_invalid(self, ingestion_service):
-        questions = ingestion_service._parse_llm_response("invalid json")
-        assert questions == []
-
     @pytest.mark.asyncio
     async def test_extract_metadata_success(self, ingestion_service, mock_llm_client):
         node = TextNode(id_="1", text="Content")
-        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
+        mock_llm_client.generate_completion.return_value = QuestionMetadata(questions=["Q1"])
         processed_node, success = await ingestion_service._extract_metadata(node)
         assert success
         assert processed_node.metadata["questions"] == ["Q1"]
@@ -139,7 +126,7 @@ class TestIngestionService:
     @pytest.mark.asyncio
     async def test_process_nodes_success(self, ingestion_service, mock_llm_client):
         nodes = [TextNode(id_="1", text="Content")]
-        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
+        mock_llm_client.generate_completion.return_value = QuestionMetadata(questions=["Q1"])
         processed = await ingestion_service._process_nodes(nodes)
         assert len(processed) == 1
 
@@ -221,7 +208,7 @@ class TestIngestionService:
         # Mock all steps
         mock_reader.load_data.return_value = [Document(text="Content")]
         mock_node_parser.get_nodes_from_documents.return_value = [TextNode(id_="1", text="Content")]
-        mock_llm_client.generate_completion.return_value = '{"questions": ["Q1"]}'
+        mock_llm_client.generate_completion.return_value = QuestionMetadata(questions=["Q1"])
         mock_embedding_client.embed_document.return_value = [0.1]
         mock_vector_client.upsert = AsyncMock()
 

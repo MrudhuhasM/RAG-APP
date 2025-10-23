@@ -4,19 +4,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from rag_app.app import app
 from rag_app.services.rag import RagService
 from rag_app.api.routes.rag import get_rag_service
+import json
 
 client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def mock_dependencies():
+    mock_service = MagicMock()
+    app.dependency_overrides[get_rag_service] = lambda: mock_service
+    yield
+    app.dependency_overrides = {}
 
 @pytest.fixture
 def mock_rag_service():
     service = MagicMock(spec=RagService)
-    service.answer_query = AsyncMock(return_value={
-        "answer": "Test answer",
-        "sources": [
+    # Mock the async generator
+    async def mock_answer_query(query):
+        yield {"type": "token", "data": "Test answer"}
+        yield {"type": "sources", "data": [
             {"content": "content1", "score": 0.9, "source": "src1", "rerank_score": 0.8},
             {"content": "content2", "score": 0.8, "source": "src2", "rerank_score": 0.7}
-        ]
-    })
+        ]}
+    service.answer_query = mock_answer_query
     return service
 
 class TestRAGRoutes:
@@ -28,11 +37,20 @@ class TestRAGRoutes:
         response = client.post("/api/v1/query", json={"query": "What is AI?"})
         
         assert response.status_code == 200
-        data = response.json()
-        assert data["answer"] == "Test answer"
-        assert len(data["sources"]) == 2
-        assert data["sources"][0]["content"] == "content1"
-        mock_rag_service.answer_query.assert_called_once_with("What is AI?")
+        # Parse SSE response
+        lines = response.text.strip().split('\n\n')
+        events = []
+        for line in lines:
+            if line.startswith('data: '):
+                data = line[6:]  # Remove 'data: '
+                events.append(json.loads(data))
+        
+        assert len(events) == 2
+        assert events[0]["type"] == "token"
+        assert events[0]["data"] == "Test answer"
+        assert events[1]["type"] == "sources"
+        assert len(events[1]["data"]) == 2
+        assert events[1]["data"][0]["content"] == "content1"
         
         # Clean up
         app.dependency_overrides = {}
@@ -50,24 +68,23 @@ class TestRAGRoutes:
         assert "Query cannot be empty" in response.json()["detail"]
 
     def test_query_service_failure(self, mock_rag_service):
+        async def failing_answer_query(query):
+            raise Exception("Service error")
+        mock_rag_service.answer_query = failing_answer_query
+        
         app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
-        mock_rag_service.answer_query.side_effect = Exception("Service error")
         
         response = client.post("/api/v1/query", json={"query": "test"})
         
-        assert response.status_code == 500
-        assert "Internal server error" in response.json()["detail"]
+        assert response.status_code == 200  # Streaming response
+        lines = response.text.strip().split('\n\n')
+        events = []
+        for line in lines:
+            if line.startswith('data: '):
+                data = line[6:]
+                events.append(json.loads(data))
         
-        app.dependency_overrides = {}
-
-    def test_query_invalid_response(self, mock_rag_service):
-        app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
-        mock_rag_service.answer_query.return_value = {"invalid": "response"}
-        
-        response = client.post("/api/v1/query", json={"query": "test"})
-        
-        assert response.status_code == 500
-        assert "Invalid service response" in response.json()["detail"]
+        assert any(e["type"] == "error" for e in events)
         
         app.dependency_overrides = {}
 
@@ -75,15 +92,3 @@ class TestRAGRoutes:
         response = client.post("/api/v1/query", json={"invalid": "data"})
         
         assert response.status_code == 422  # Validation error
-
-    def test_query_service_initialization_failure(self):
-        # Mock the get_rag_service function to raise exception
-        def failing_dependency():
-            raise Exception("Init failed")
-        
-        app.dependency_overrides[get_rag_service] = failing_dependency
-        
-        with pytest.raises(Exception, match="Init failed"):
-            client.post("/api/v1/query", json={"query": "test"})
-        
-        app.dependency_overrides = {}

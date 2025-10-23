@@ -1,9 +1,9 @@
 from contextlib import asynccontextmanager
 from uuid import uuid4
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from sentence_transformers import CrossEncoder
 
@@ -96,6 +96,9 @@ async def add_request_id(request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
+    except HTTPException:
+        # Let HTTPExceptions propagate to return proper status codes
+        raise
     except Exception as e:
         logger.error(f"Request failed", extra={"request_id": request_id, "error": str(e)}, exc_info=True)
         return JSONResponse(
@@ -128,13 +131,9 @@ app.include_router(ingest, prefix=API_PREFIX)
 app.include_router(rag, prefix=API_PREFIX)
 
 # Mount static files
-# Get the static directory path relative to this file
 static_dir = Path(__file__).parent.parent.parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-    
-    # Serve index.html at root
-    from fastapi.responses import FileResponse
     
     @app.get("/")
     async def serve_frontend():

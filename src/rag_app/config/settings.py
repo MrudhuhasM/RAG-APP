@@ -110,7 +110,13 @@ class Settings(BaseSettings):
     http_timeout: float = 30.0
     embedding_timeout: float = 20.0
 
+    # RAG Settings
     semantic_threshold: float = Field(default=0.85, description="Threshold for semantic similarity")
+    retrieval_top_k: int = Field(default=10, description="Number of documents to retrieve")
+    retrieval_questions_top_k: int = Field(default=20, description="Number of questions to retrieve")
+    rerank_top_k: int = Field(default=5, description="Number of documents after reranking")
+    context_max_tokens: int = Field(default=5000, description="Maximum tokens for context")
+    vector_upsert_batch_size: int = Field(default=100, description="Batch size for vector upserts")
 
     # Nested settings - Pydantic will auto-populate from env vars
     openai: OpenAISettings = Field(default_factory=OpenAISettings)

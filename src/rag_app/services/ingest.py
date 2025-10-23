@@ -1,9 +1,7 @@
 import time
-import json
 import asyncio
 import os
 from typing import Optional
-from openai import AsyncOpenAI
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import SemanticSplitterNodeParser
 from tqdm.asyncio import tqdm

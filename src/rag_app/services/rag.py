@@ -5,9 +5,9 @@ from rag_app.config.logging import logger
 from rag_app.config.settings import settings
 from rag_app.llm.base import BaseLLMModel
 import time
-import json
 import uuid
 import asyncio
+from typing import AsyncGenerator, Optional
 from sentence_transformers import CrossEncoder
 from typing import AsyncGenerator, Optional
 from rag_app.utils.tokenizer import count_tokens, get_tokenizer
@@ -69,18 +69,20 @@ class RagService:
             logger.warning(f"Falling back to default LLM model: {self._llm_model.model_name}")
             return self._llm_model
 
-    async def rerank(self,query: str, contexts: list[dict], top_k: int = 5) -> list[dict]:
+    async def rerank(self, query: str, contexts: list[dict], top_k: Optional[int] = None) -> list[dict]:
         """
         Reranks the retrieved contexts based on their relevance to the query.
 
         Args:
             query (str): The user query.
             contexts (list[dict]): The list of context documents to rerank.
-            top_k (int, optional): The number of top contexts to return. Defaults to 5.
+            top_k (int, optional): The number of top contexts to return. Defaults to settings value.
 
         Returns:
             list[dict]: The reranked list of context documents.
         """
+        if top_k is None:
+            top_k = settings.rerank_top_k
         try:
             pairs = [(query, context['content']) for context in contexts]
             scores = await asyncio.to_thread(self._reranker.predict, pairs)
@@ -182,18 +184,20 @@ class RagService:
             logger.error(f"Query rewriting failed: {e}")
             return query
 
-    async def retrieve_documents(self, query_emb: list[float], top_k: int = 10, namespace: str = "") -> list[dict]:
+    async def retrieve_documents(self, query_emb: list[float], top_k: Optional[int] = None, namespace: str = "") -> list[dict]:
         """
         Retrieves documents from the vector store based on the query embedding.
 
         Args:
             query_emb (list[float]): The embedding vector of the user query.
-            top_k (int, optional): The number of top documents to retrieve. Defaults to 10.
+            top_k (int, optional): The number of top documents to retrieve. Defaults to settings value.
             namespace (str, optional): The namespace to query within. Defaults to "".
 
         Returns:
             list[dict]: The list of retrieved documents.
         """
+        if top_k is None:
+            top_k = settings.retrieval_top_k
         try:
             results = await self._vector_client.query(
                 vector=query_emb,
@@ -271,17 +275,19 @@ class RagService:
         truncated_tokens = tokens[:max_tokens]
         return tokenizer.decode(truncated_tokens)
     
-    def build_context_with_limit(self, contexts: list[dict], max_tokens: int = 2048) -> str:
+    def build_context_with_limit(self, contexts: list[dict], max_tokens: Optional[int] = None) -> str:
         """
         Builds the context string from contexts, limiting to max_tokens.
 
         Args:
             contexts (list[dict]): The list of context documents.
-            max_tokens (int): The maximum number of tokens for the context.
+            max_tokens (int): The maximum number of tokens for the context. Defaults to settings value.
 
         Returns:
             str: The context string within the token limit.
         """
+        if max_tokens is None:
+            max_tokens = settings.context_max_tokens
         context_parts = []
         current_tokens = 0
         for ctx in contexts:
@@ -319,13 +325,15 @@ class RagService:
         if not contexts:
             logger.warning("No contexts available to generate an answer.")
             yield "No contexts available to generate an answer."
+            return
         if not query:
             yield "Please provide a valid query."
+            return
         
         try:
             logger.info(f"Using LLM model: {llm_model.model_name}")
             
-            context_texts = self.build_context_with_limit(contexts, 5000)
+            context_texts = self.build_context_with_limit(contexts)
             prompt = f"""
             You are an advanced AI assistant tasked with answering questions based strictly on the provided contexts.
             Your response should be concise, accurate, and directly supported by the contexts.
@@ -412,8 +420,12 @@ class RagService:
             logger.info("Retrieving relevant documents from vector store.")
             yield {"type": "status", "data": "Retrieving relevant documents."}
 
-            doc_task = self.retrieve_documents(query_embedding, top_k=10)
-            question_task = self.retrieve_documents(query_embedding, top_k=20, namespace=settings.pinecone.questions_namespace)
+            doc_task = self.retrieve_documents(query_embedding)
+            question_task = self.retrieve_documents(
+                query_embedding, 
+                top_k=settings.retrieval_questions_top_k, 
+                namespace=settings.pinecone.questions_namespace
+            )
 
             results, question_results = await asyncio.gather(doc_task, question_task)
             logger.info(f"Retrieved {len(results)} relevant documents and {len(question_results)} relevant questions.")
@@ -426,7 +438,7 @@ class RagService:
             
             logger.info("Reranking the retrieved results.")
             yield {"type": "status", "data": "Reranking retrieved documents."}
-            final_results = await self.rerank(rewritten_query, final_results, top_k=5)
+            final_results = await self.rerank(rewritten_query, final_results)
 
             logger.info("Generating final answer from top contexts.")
             yield {"type": "status", "data": "Generating final answer."}            

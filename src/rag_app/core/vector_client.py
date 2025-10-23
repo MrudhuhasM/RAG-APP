@@ -99,7 +99,7 @@ class VectorClient:
         self,
         vectors: List[Any],
         namespace: str = "",
-        batch_size: int = 100
+        batch_size: Optional[int] = None
     ) -> None:
         """
         Upsert vectors into the index.
@@ -107,11 +107,15 @@ class VectorClient:
         Args:
             vectors: List of vector dicts with 'id', 'values', and optional 'metadata'
             namespace: Namespace for isolation
-            batch_size: Number of vectors to upsert in each batch
+            batch_size: Number of vectors to upsert in each batch (defaults to settings value)
         """
         if not vectors:
             logger.warning("No vectors provided for upsert")
             return
+        
+        if batch_size is None:
+            from rag_app.config.settings import settings
+            batch_size = settings.vector_upsert_batch_size
 
         try:
             # Split into batches to avoid payload size limits
