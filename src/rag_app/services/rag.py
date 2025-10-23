@@ -10,6 +10,7 @@ import uuid
 import asyncio
 from sentence_transformers import CrossEncoder
 from typing import AsyncGenerator
+from rag_app.utils.tokenizer import count_tokens, get_tokenizer
 
 class RagService:
     def __init__(self,
@@ -120,15 +121,17 @@ class RagService:
             Make sure your rewritten query captures the intent of the original query.
             without any confusion or ambiguity.
             This RAG system answers questions on Complete Works of Mahatma Gandhi.
+            Give only the rewritten query as output.No other text.or explanation.
+            If the query is already specific, return it as is.
+            Do not in any circumstance give an empty response.
             Original Query: {query}
             Rewritten Query:"""
             messages = [
                 {"role": "system", "content": "You are a helpful assistant that rewrites user queries to be more specific."},
                 {"role": "user", "content": prompt}
             ]
-            response = await self._llm_model.generate_completion(
+            response = await self._llm_model.generate_response(
                 messages=messages,
-                model=settings.openai.completion_model,
             )
 
             return response
@@ -207,6 +210,56 @@ class RagService:
             logger.error(f"Duplicate removal failed: {e}")
             return results
     
+    def truncate_text(self, text: str, max_tokens: int) -> str:
+        """
+        Truncates the text to the specified number of tokens.
+
+        Args:
+            text (str): The text to truncate.
+            max_tokens (int): The maximum number of tokens.
+
+        Returns:
+            str: The truncated text.
+        """
+        if count_tokens(text) <= max_tokens:
+            return text
+        tokenizer = get_tokenizer()
+        tokens = tokenizer.encode(text)
+        truncated_tokens = tokens[:max_tokens]
+        return tokenizer.decode(truncated_tokens)
+    
+    def build_context_with_limit(self, contexts: list[dict], max_tokens: int = 2048) -> str:
+        """
+        Builds the context string from contexts, limiting to max_tokens.
+
+        Args:
+            contexts (list[dict]): The list of context documents.
+            max_tokens (int): The maximum number of tokens for the context.
+
+        Returns:
+            str: The context string within the token limit.
+        """
+        context_parts = []
+        current_tokens = 0
+        for ctx in contexts:
+            source_part = f"Source: {ctx['source']}\nContent: "
+            source_tokens = count_tokens(source_part)
+            content = ctx['content']
+            content_tokens = count_tokens(content)
+            total_part_tokens = source_tokens + content_tokens
+            if current_tokens + total_part_tokens <= max_tokens:
+                part = source_part + content
+                context_parts.append(part)
+                current_tokens += total_part_tokens
+            else:
+                remaining_tokens = max_tokens - current_tokens - source_tokens
+                if remaining_tokens > 0:
+                    truncated_content = self.truncate_text(content, remaining_tokens)
+                    part = source_part + truncated_content
+                    context_parts.append(part)
+                break
+        return "\n\n".join(context_parts)
+    
     async def generate_answer(self, query: str, contexts: list[dict]) -> AsyncGenerator[str, None]:
         """
         Generates a final answer based on the top contexts.
@@ -226,7 +279,7 @@ class RagService:
             yield "Please provide a valid query."
         
         try:        
-            context_texts = "\n\n".join([f"Source: {ctx['source']}\nContent: {ctx['content']}" for ctx in contexts])
+            context_texts = self.build_context_with_limit(contexts, 5000)
             prompt = f"""
             You are an advanced AI assistant tasked with answering questions based strictly on the provided contexts.
             Your response should be concise, accurate, and directly supported by the contexts.
@@ -244,9 +297,7 @@ class RagService:
                 {"role": "user", "content": prompt}
             ]
             
-            async for chunk in self._llm_model.stream_completion(
-                messages=messages,
-                model=settings.openai.completion_model):
+            async for chunk in self._llm_model.stream_completion(messages=messages):
                 yield chunk
 
         except Exception as e:
@@ -268,6 +319,15 @@ class RagService:
         if not query:
             logger.warning("Received empty query.")
             yield {"type": "error", "data": "Please provide a valid query."}
+
+        input_tokens = 0 
+        output_tokens = 0
+        model_name = self._llm_model.model_name
+
+        try:
+            input_tokens = count_tokens(query)
+        except Exception as e:
+            logger.error(f"Token counting failed: {e}")
         
         try:
             cache_key = f"rag_answer:{query}"
@@ -330,15 +390,36 @@ class RagService:
                 yield {"type": "token", "data": chunk}
 
             answer_text = ''.join(full_answer)
+
+            error_responses = [
+                "I do not have relevant information to answer that question.",
+                "No contexts available to generate an answer.",
+                "An error occurred while generating the answer.",
+                "Please provide a valid query.",
+                "",
+                " "
+            ]
             # Cache the final answer and sources
-            await self._cache_client.set(cache_key, {"answer": answer_text, "sources": final_results})
-            await self._add_to_semantic_cache(query_embedding, cache_key)
-            logger.info("Final answer and sources cached.")
+            if answer_text not in error_responses:
+                await self._cache_client.set(cache_key, {"answer": answer_text, "sources": final_results})
+                await self._add_to_semantic_cache(query_embedding, cache_key)
+                logger.info("Final answer and sources cached.")
                 
             yield {"type": "sources", "data": final_results}
             elapsed_time = time.time() - start_time
             logger.info(f"RAG retrieval completed in {elapsed_time:.2f} seconds.")
             
+            output_tokens = count_tokens(answer_text)
+            model_costs = settings.MODEL_COSTS.get(model_name)
+
+            if not model_costs:
+                logger.warning(f"Model costs not defined for model: {model_name}")
+
+            input_cost = (input_tokens / 1000) * model_costs['input'] if model_costs else 0
+            output_cost = (output_tokens / 1000) * model_costs['output'] if model_costs else 0
+            total_cost = input_cost + output_cost
+
+            logger.info(f"Request Processed: Input tokens {input_tokens}, Output tokens {output_tokens}, Input cost {input_cost}, Output cost {output_cost}, Total cost {total_cost}, Model {model_name}")
         except Exception as e:
             logger.error(f"Error in answering query: {e}")
             yield {"type": "error", "data": "An error occurred while processing your query."}

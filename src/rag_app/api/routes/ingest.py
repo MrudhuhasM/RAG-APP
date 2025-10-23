@@ -1,29 +1,21 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, BackgroundTasks, Form
 import tempfile
 import os
 import logging
-from typing import Annotated, Dict, Any
+import json
+from typing import Annotated, Dict, Any, Optional
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import SemanticSplitterNodeParser
 from rag_app.services.ingest import IngestionService
 from rag_app.config.settings import settings
-from pydantic import BaseModel
+from rag_app.schemas.ingest import IngestResponse, IngestRequest, IngestionStatusResponse, IngestionStatus
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-class IngestRequest(BaseModel):
-    source_name: str
-    source_uri: str
-    source_type: str
-    source_config: Dict[str, Any] = {}
 
-
-class IngestResponse(BaseModel):
-    message: str
-    task_id: str
 
 
 # Dependency for IngestionService using app state singletons
@@ -46,7 +38,10 @@ async def get_ingestion_service(request: Request) -> IngestionService:
 async def ingest_file(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),    
+    file: UploadFile = File(...),
+    source_name: Optional[str] = Form(None),
+    source_type: str = Form("pdf"),
+    source_config: str = Form("{}"),
     ingestion_service: IngestionService = Depends(get_ingestion_service)
 ):
     """Ingest a PDF document into the vector database."""
@@ -75,17 +70,40 @@ async def ingest_file(
     
     try:
         request_id = getattr(request.state, 'request_id', 'unknown')
+        
+        # Use filename as source_name if not provided
+        final_source_name = source_name if source_name else file.filename
+        
+        # Parse source_config JSON
+        try:
+            parsed_config = json.loads(source_config)
+        except json.JSONDecodeError:
+            parsed_config = {}
+        
+        # Initialize status tracking
+        request.app.state.ingestion_status[request_id] = {
+            "task_id": request_id,
+            "status": IngestionStatus.PENDING,
+            "message": "Ingestion queued",
+            "progress": 0,
+            "error": None,
+            "total_nodes": None,
+            "processed_nodes": None
+        }
+        
         logger.info(
             "Starting ingestion",
             extra={"filename": file.filename, "size": len(content), "request_id": request_id}
         )
         background_tasks.add_task(
             ingestion_service.ingest,
-            source_name=request.source_name,
-            source_uri=request.source_uri,
-            source_type=request.source_type,
-            source_config=request.source_config,
+            source_name=final_source_name,
+            source_uri=temp_path,
+            source_type=source_type,
+            source_config=parsed_config,
             request_id=request_id,
+            delete_file=True,
+            status_tracker=request.app.state.ingestion_status
         )
 
         return IngestResponse(message="Ingestion started", task_id=request_id)
@@ -97,6 +115,15 @@ async def ingest_file(
             exc_info=True
         )
         raise HTTPException(status_code=422, detail=f"Ingestion error: {type(e).__name__}")
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+
+
+@router.get("/ingest/status/{task_id}", response_model=IngestionStatusResponse)
+async def get_ingestion_status(task_id: str, request: Request):
+    """Get the status of an ingestion task."""
+    status_tracker = request.app.state.ingestion_status
+    
+    if task_id not in status_tracker:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    status_data = status_tracker[task_id]
+    return IngestionStatusResponse(**status_data)

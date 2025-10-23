@@ -1,6 +1,8 @@
 import time
 import json
 import asyncio
+import os
+from typing import Optional
 from openai import AsyncOpenAI
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import SemanticSplitterNodeParser
@@ -14,6 +16,8 @@ from rag_app.config.logging import logger
 from rag_app.config.settings import settings
 from rag_app.embeddings.base import BaseEmbeddingModel
 from rag_app.core.vector_client import VectorClient
+from rag_app.schemas.metadata import QuestionMetadata
+from rag_app.schemas.ingest import IngestionStatus
 
 
 class IngestionService:
@@ -65,17 +69,10 @@ class IngestionService:
     def _build_prompt(self, node: BaseNode) -> str:
         prompt = f"""
         You will be provided with a chunk of text from a document.
-        Your task is to extract 5 questions that can be answered using the information in the text.
+        Your task is to extract 2 questions that can be answered using the information in the text.
         you will answer in the following json format
-        {{
-            "questions": [
-                "Question 1",
-                "Question 2",
-                "Question 3",
-                "Question 4",
-                "Question 5"
-            ]
-        }}
+        You should only respond with the JSON object and nothing else.no other text.this is very important.
+        Only output 2 questions not more not less. 
         Text: {node.get_content()}       
         """
         return prompt
@@ -87,36 +84,37 @@ class IngestionService:
                 {"role": "user", "content": prompt}
             ]
             response = await self._llm_model.generate_completion(
-                model=settings.openai.completion_model,
                 messages=messages,
-                max_tokens=500,
-                temperature=0.7
+                temperature=0.7,
+                structured_format=QuestionMetadata
             )
-            content = response.strip()
+            content = response.questions
             return content if content else None
         except Exception as e:
             logger.warning(f"LLM call failed: {e}")
             return None
 
-    def _parse_llm_response(self, response: str) -> list[str]:
-        try:
-            if "```json" in response:
-                response = response.replace("```json", "").replace("```", "").strip()
-            data = json.loads(response)
-            return data.get("questions", [])
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM response: {e}")
-            return []
+    # def _parse_llm_response(self, response: str) -> list[str]:
+    #     try:
+    #         if "<think>" in response:
+    #             response = response.split("</think>")[-1].strip()
+    #         if "```json" in response:
+    #             response = response.replace("```json", "").replace("```", "").strip()
+    #         data = json.loads(response)
+    #         return data.get("questions", [])
+    #     except json.JSONDecodeError as e:
+    #         logger.warning(f"Failed to parse LLM response: {e}")
+    #         logger.warning(f"Response content: {response}")
+    #         return []
         
 
     async def _extract_metadata(self, node: BaseNode) -> tuple[BaseNode, bool]:
         async with self._semaphore:
             try:
                 prompt = self._build_prompt(node)
-                llm_response = await self._call_llm(prompt)
-                if llm_response is None:
+                questions = await self._call_llm(prompt)
+                if questions is None:
                     return node, False
-                questions = await asyncio.get_event_loop().run_in_executor(None, lambda: self._parse_llm_response(llm_response))
                 node.metadata.update({"questions": questions})
                 return node, True
             except Exception as e:
@@ -224,16 +222,60 @@ class IngestionService:
             logger.info("No questions to upsert.")
     
 
-    async def ingest(self, source_name: str, source_uri: str, source_type: str, source_config: dict, request_id: str) -> list[BaseNode]:
+    async def ingest(self, source_name: str, source_uri: str, source_type: str, source_config: dict, request_id: str, delete_file: bool = False, status_tracker: Optional[dict] = None) -> list[BaseNode]:
         start = time.time()
         logger.info(f"Ingestion started for source: {source_name}, URI: {source_uri}, Type: {source_type}, Request ID: {request_id}")
-        documents = await self._ingest_file(source_uri)
-        documents = await self._preprocess_documents(documents)
-        nodes = await self._chunk_documents(documents)
-        nodes = await self._process_nodes(nodes)
-        nodes = await self._embed_nodes(nodes)
-        await self._upsert_nodes(nodes)
-        await self._upsert_questions(nodes)
-        end = time.time()
-        logger.info(f"Ingestion completed for source: {source_name}, URI: {source_uri}, Type: {source_type}, Request ID: {request_id} in {end - start:.2f} seconds")
-        return nodes
+        
+        def update_status(status: IngestionStatus, message: str, progress: Optional[int] = None, total_nodes: Optional[int] = None, processed_nodes: Optional[int] = None):
+            """Helper function to update status tracker"""
+            if status_tracker is not None and request_id in status_tracker:
+                status_tracker[request_id].update({
+                    "status": status,
+                    "message": message,
+                    "progress": progress,
+                    "total_nodes": total_nodes,
+                    "processed_nodes": processed_nodes
+                })
+                logger.info(f"Status updated: {status} - {message}")
+        
+        try:
+            update_status(IngestionStatus.LOADING, "Loading documents from file...", 10)
+            documents = await self._ingest_file(source_uri)
+            
+            update_status(IngestionStatus.PREPROCESSING, "Preprocessing documents...", 20)
+            documents = await self._preprocess_documents(documents)
+            
+            update_status(IngestionStatus.CHUNKING, "Chunking documents into nodes...", 30)
+            nodes = await self._chunk_documents(documents)
+            
+            update_status(IngestionStatus.EXTRACTING_METADATA, "Extracting metadata from nodes...", 40, len(nodes), 0)
+            nodes = await self._process_nodes(nodes)
+            
+            update_status(IngestionStatus.EMBEDDING, "Generating embeddings...", 60, len(nodes), 0)
+            nodes = await self._embed_nodes(nodes)
+            
+            update_status(IngestionStatus.UPSERTING, "Uploading to vector database...", 80)
+            await self._upsert_nodes(nodes)
+            await self._upsert_questions(nodes)
+            
+            update_status(IngestionStatus.COMPLETED, "Ingestion completed successfully!", 100, len(nodes), len(nodes))
+            
+            end = time.time()
+            logger.info(f"Ingestion completed for source: {source_name}, URI: {source_uri}, Type: {source_type}, Request ID: {request_id} in {end - start:.2f} seconds")
+            
+            if delete_file:
+                os.unlink(source_uri)
+            
+            return nodes
+            
+        except Exception as e:
+            logger.error(f"Ingestion failed: {e}", exc_info=True)
+            if status_tracker is not None and request_id in status_tracker:
+                status_tracker[request_id].update({
+                    "status": IngestionStatus.FAILED,
+                    "message": "Ingestion failed",
+                    "error": str(e)
+                })
+            if delete_file and os.path.exists(source_uri):
+                os.unlink(source_uri)
+            raise

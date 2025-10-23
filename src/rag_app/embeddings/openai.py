@@ -6,9 +6,9 @@ from rag_app.config.logging import logger
 
 
 class OpenAIEmbeddingModel(BaseEmbeddingModel):
-    def __init__(self, _client):
+    def __init__(self, _client, _model_name: str):
         self._client = _client
-        self.model_name = settings.openai.embedding_model
+        self._model = _model_name
 
     @retry(
         stop=stop_after_attempt(3),
@@ -18,7 +18,7 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
     )
     async def embed_document(self, document):
         response = await self._client.embeddings.create(
-            model=self.model_name,
+            model=self._model,
             input=document
         )
         return response.data[0].embedding
@@ -31,7 +31,7 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
     )
     async def embed_documents(self, documents):
         response = await self._client.embeddings.create(
-            model=self.model_name,
+            model=self._model,
             input=documents
         )
         results = await asyncio.get_event_loop().run_in_executor(

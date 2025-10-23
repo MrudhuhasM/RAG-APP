@@ -15,6 +15,8 @@ const historyList = document.getElementById('historyList');
 
 // State
 let queryHistory = JSON.parse(localStorage.getItem('queryHistory') || '[]');
+let currentIngestionTaskId = null;
+let ingestionPollingInterval = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -69,23 +71,29 @@ function initializeEventListeners() {
 
 // File Upload Handler
 async function handleFileUpload(file) {
+    console.log('=== UPLOAD STARTED ===');
     console.log('Uploading file:', file.name);
     
     if (!file.name.toLowerCase().endsWith('.pdf')) {
-        showUploadStatus('Only PDF files are supported', 'error');
+        showUploadStatus('❌ Only PDF files are supported', 'error');
         return;
     }
     
-    const maxSize = 10 * 1024 * 1024; // 10MB
+    const maxSize = 30 * 1024 * 1024; // 30MB
     if (file.size > maxSize) {
-        showUploadStatus('File size exceeds 10MB limit', 'error');
+        showUploadStatus('❌ File size exceeds 30MB limit', 'error');
         return;
     }
     
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('source_name', file.name);
+    formData.append('source_type', 'pdf');
+    formData.append('source_config', '{}');
     
-    showUploadStatus('Uploading ' + file.name + '...', 'loading');
+    showUploadStatus('⏳ Uploading ' + file.name + '...', 'loading');
+    console.log('Disabling query section...');
+    disableQuerySection();
     
     try {
         const response = await fetch(API_BASE_URL + '/ingest', {
@@ -99,26 +107,155 @@ async function handleFileUpload(file) {
         }
         
         const result = await response.json();
+        currentIngestionTaskId = result.task_id;
+        
+        console.log('Upload successful! Task ID:', currentIngestionTaskId);
+        
         showUploadStatus(
-            ' Successfully uploaded and processed: ' + result.file,
-            'success'
+            '📤 Upload successful! Processing document...',
+            'loading'
         );
         
-        // Clear after 5 seconds
-        setTimeout(() => {
-            uploadStatus.className = 'upload-status';
-            uploadStatus.textContent = '';
-        }, 5000);
+        console.log('Starting status polling...');
+        
+        // Start polling for ingestion status
+        startIngestionStatusPolling(result.task_id);
         
     } catch (error) {
         console.error('Upload error:', error);
-        showUploadStatus(' Upload failed: ' + error.message, 'error');
+        showUploadStatus('❌ Upload failed: ' + error.message, 'error');
+        console.log('Enabling query section due to error...');
+        enableQuerySection();
     }
 }
 
 function showUploadStatus(message, type) {
-    uploadStatus.textContent = message;
+    uploadStatus.innerHTML = message;
     uploadStatus.className = 'upload-status ' + type;
+}
+
+// Ingestion Status Polling
+async function startIngestionStatusPolling(taskId) {
+    // Clear any existing polling interval
+    if (ingestionPollingInterval) {
+        clearInterval(ingestionPollingInterval);
+    }
+    
+    // Poll every 2 seconds
+    ingestionPollingInterval = setInterval(async () => {
+        await checkIngestionStatus(taskId);
+    }, 2000);
+    
+    // Check immediately
+    await checkIngestionStatus(taskId);
+}
+
+async function checkIngestionStatus(taskId) {
+    try {
+        console.log('Checking status for task:', taskId);
+        const response = await fetch(API_BASE_URL + '/ingest/status/' + taskId);
+        
+        if (!response.ok) {
+            throw new Error('Failed to fetch status');
+        }
+        
+        const status = await response.json();
+        console.log('Ingestion status received:', status);
+        
+        updateIngestionStatusUI(status);
+        
+        // Stop polling if completed or failed
+        if (status.status === 'completed') {
+            console.log('Ingestion completed!');
+            clearInterval(ingestionPollingInterval);
+            ingestionPollingInterval = null;
+            currentIngestionTaskId = null;
+            showUploadStatus('✅ ' + status.message, 'success');
+            console.log('Enabling query section...');
+            enableQuerySection();
+            
+            // Clear status after 5 seconds
+            setTimeout(() => {
+                uploadStatus.className = 'upload-status';
+                uploadStatus.innerHTML = '';
+            }, 5000);
+        } else if (status.status === 'failed') {
+            console.log('Ingestion failed!');
+            clearInterval(ingestionPollingInterval);
+            ingestionPollingInterval = null;
+            currentIngestionTaskId = null;
+            showUploadStatus('❌ Ingestion failed: ' + (status.error || 'Unknown error'), 'error');
+            console.log('Enabling query section after failure...');
+            enableQuerySection();
+        }
+        
+    } catch (error) {
+        console.error('Status check error:', error);
+    }
+}
+
+function updateIngestionStatusUI(status) {
+    const progressBar = getProgressBar(status.progress || 0);
+    const statusEmoji = getStatusEmoji(status.status);
+    
+    let message = statusEmoji + ' ' + status.message;
+    
+    if (status.progress !== null && status.progress !== undefined) {
+        message += ' (' + status.progress + '%)';
+    }
+    
+    if (status.processed_nodes !== null && status.total_nodes !== null) {
+        message += ' - ' + status.processed_nodes + '/' + status.total_nodes + ' nodes';
+    }
+    
+    showUploadStatus(
+        '<div class="ingestion-progress">' +
+        '<div>' + message + '</div>' +
+        progressBar +
+        '</div>',
+        'loading'
+    );
+}
+
+function getProgressBar(progress) {
+    return '<div class="progress-bar-container">' +
+           '<div class="progress-bar" style="width: ' + progress + '%"></div>' +
+           '</div>';
+}
+
+function getStatusEmoji(status) {
+    const emojiMap = {
+        'pending': '⏳',
+        'loading': '📂',
+        'preprocessing': '🔍',
+        'chunking': '✂️',
+        'extracting_metadata': '🤖',
+        'embedding': '🧮',
+        'upserting': '☁️',
+        'completed': '✅',
+        'failed': '❌'
+    };
+    return emojiMap[status] || '⏳';
+}
+
+function disableQuerySection() {
+    console.log('DISABLING query section - currentIngestionTaskId:', currentIngestionTaskId);
+    queryInput.disabled = true;
+    askButton.disabled = true;
+    queryInput.placeholder = 'Please wait for document ingestion to complete...';
+    askButton.style.opacity = '0.5';
+    console.log('Query input disabled:', queryInput.disabled);
+    console.log('Ask button disabled:', askButton.disabled);
+}
+
+function enableQuerySection() {
+    console.log('ENABLING query section');
+    queryInput.disabled = false;
+    askButton.disabled = false;
+    queryInput.placeholder = 'Ask anything about your uploaded documentation...';
+    askButton.style.opacity = '1';
+    console.log('Query input enabled:', !queryInput.disabled);
+    console.log('Ask button enabled:', !askButton.disabled);
 }
 
 // Query Handler with Streaming Support
@@ -129,6 +266,12 @@ async function handleQuery() {
     
     if (!query) {
         alert('Please enter a question');
+        return;
+    }
+    
+    // Check if ingestion is in progress
+    if (currentIngestionTaskId !== null) {
+        alert('Please wait for document ingestion to complete before asking questions');
         return;
     }
     

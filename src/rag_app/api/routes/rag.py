@@ -6,17 +6,11 @@ from fastapi.responses import StreamingResponse
 from rag_app.services.rag import RagService
 from rag_app.config.settings import settings
 from rag_app.config.logging import logger
+from rag_app.schemas.query import QueryRequest, Source
 
 router = APIRouter()
 
-class QueryRequest(BaseModel):
-    query: str
 
-class Source(BaseModel):
-    content: str
-    score: float
-    source: str
-    rerank_score: Optional[float] = None
 
 class AnswerResponse(BaseModel):
     answer: str

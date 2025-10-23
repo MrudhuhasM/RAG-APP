@@ -5,12 +5,13 @@ from rag_app.embeddings.base import BaseEmbeddingModel
 
 class GeminiEmbeddingModel(BaseEmbeddingModel):
 
-    def __init__(self, _client):
+    def __init__(self, _client, _model_name: str):
         self._client = _client
+        self._model = _model_name
 
     async def embed_document(self, document):
         response = await self._client.aio.models.embed_content(
-            model=settings.gemini.embedding_model,
+            model=self._model,
             contents=document,
             config=types.EmbedContentConfig(output_dimensionality=settings.embedding.dimension)
         )
@@ -19,7 +20,7 @@ class GeminiEmbeddingModel(BaseEmbeddingModel):
 
     async def embed_documents(self, documents):
         response = await self._client.aio.models.embed_content(
-            model=settings.gemini.embedding_model,
+            model=self._model,
             contents=documents,
             config=types.EmbedContentConfig(output_dimensionality=settings.embedding.dimension)
         )

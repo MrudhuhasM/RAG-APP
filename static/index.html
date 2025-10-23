@@ -18,7 +18,7 @@
         <main>
             <!-- Upload Section -->
             <section class="upload-section">
-                <h2> Upload Documentation</h2>
+                <h2>📤 Upload Documentation</h2>
                 <div class="upload-container">
                     <div class="upload-area" id="uploadArea">
                         <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -27,7 +27,7 @@
                             <line x1="12" y1="3" x2="12" y2="15"></line>
                         </svg>
                         <p class="upload-text">Drop PDF file here or click to browse</p>
-                        <p class="upload-hint">Maximum file size: 10MB</p>
+                        <p class="upload-hint">Maximum file size: 30MB • Processing happens in the background</p>
                         <input type="file" id="fileInput" accept=".pdf" hidden>
                     </div>
                     <div class="upload-status" id="uploadStatus"></div>
@@ -36,7 +36,7 @@
 
             <!-- Query Section -->
             <section class="query-section">
-                <h2> Ask a Question</h2>
+                <h2>💬 Ask a Question</h2>
                 <div class="query-container">
                     <div class="query-input-wrapper">
                         <textarea 
@@ -57,12 +57,12 @@
 
             <!-- Results Section -->
             <section class="results-section" id="resultsSection" style="display: none;">
-                <h2> Answer</h2>
+                <h2>💡 Answer</h2>
                 <div class="answer-container">
                     <div class="answer-content" id="answerContent"></div>
                     
                     <div class="sources-container" id="sourcesContainer">
-                        <h3> Sources</h3>
+                        <h3>📚 Sources</h3>
                         <div id="sourcesList"></div>
                     </div>
                 </div>
@@ -70,16 +70,16 @@
 
             <!-- Chat History -->
             <section class="history-section" id="historySection" style="display: none;">
-                <h2> Recent Questions</h2>
+                <h2>📜 Recent Questions</h2>
                 <div class="history-list" id="historyList"></div>
             </section>
         </main>
 
         <footer>
-            <p>Powered by RAG  FastAPI  Pinecone</p>
+            <p>Powered by RAG 🚀 FastAPI ⚡ Pinecone 📊</p>
         </footer>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=3"></script>
 </body>
 </html>

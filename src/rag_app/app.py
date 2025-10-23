@@ -51,6 +51,9 @@ async def lifespan(app: FastAPI):
         app.state.chunk_embed_model = get_chunk_embeddings()
         app.state.llm_model = get_llm_model()
         
+        # Initialize ingestion status tracker (in-memory dict)
+        app.state.ingestion_status = {}
+        
         logger.info("Resources initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize resources: {e}", exc_info=True)

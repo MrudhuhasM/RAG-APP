@@ -225,7 +225,14 @@ class TestIngestionService:
         mock_embedding_client.embed_document.return_value = [0.1]
         mock_vector_client.upsert = AsyncMock()
 
-        nodes = await ingestion_service.ingest("test.pdf")
+        nodes = await ingestion_service.ingest(
+            source_name="test",
+            source_uri="test.pdf",
+            source_type="pdf",
+            source_config={},
+            request_id="test_id",
+            delete_file=False
+        )
         assert len(nodes) == 1
         # Verify calls
         mock_reader.load_data.assert_called_once_with("test.pdf")
